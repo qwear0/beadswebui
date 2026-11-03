@@ -17,8 +17,7 @@
  *   SCOTTY_ALLOWED_HOSTS.
  *
  * Non-browser clients (the launcher, curl, scripts) send no Origin and are
- * unaffected. Kept free of imports so scripts/test-request-guard.mjs can load it
- * directly.
+ * unaffected.
  */
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);

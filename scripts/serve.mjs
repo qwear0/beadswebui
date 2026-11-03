@@ -30,20 +30,16 @@ function nextBin() {
 
 const port = process.env.PORT || "3000";
 const host = process.env.HOST || "localhost";
-// Test hook: override the spawned command with a JSON array (BMUS_SERVE_CMD).
-const override = process.env.BMUS_SERVE_CMD ? JSON.parse(process.env.BMUS_SERVE_CMD) : null;
 
 let child = null;
 let stopping = false;
 
 function start() {
   const bin = nextBin();
-  const cmd = override ? override[0] : bin ? process.execPath : "npx";
-  const args = override
-    ? override.slice(1)
-    : bin
-      ? [bin, "start", "-p", port, "-H", host]
-      : ["next", "start", "-p", port, "-H", host]; // bin unresolved → use PATH via npx
+  const cmd = bin ? process.execPath : "npx";
+  const args = bin
+    ? [bin, "start", "-p", port, "-H", host]
+    : ["next", "start", "-p", port, "-H", host]; // bin unresolved → use PATH via npx
   child = spawn(cmd, args, {
     stdio: "inherit",
     env: { ...process.env, BMUS_SUPERVISED: "1", PORT: port, HOST: host },
