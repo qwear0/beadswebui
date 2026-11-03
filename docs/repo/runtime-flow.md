@@ -7,6 +7,7 @@
 - The repository is one Next.js application, not separate frontend/backend services.
 - Components and hooks own browser interaction; route handlers own HTTP wiring; server-only libraries own CLI/filesystem integrations.
 - Beads remains the issue-data authority. Demo issues use an in-memory store rather than the local tracker.
+- Agent presence/mail is a separate sanitized local read model produced only by the existing pi_qr runtime extension; the app neither executes Pi nor owns native worker lifecycle. See [Agent Workspace](agent-workspace.md).
 
 ## 2. Entry points and key paths
 
@@ -33,6 +34,7 @@ Live refresh anchors:
 - `app/api/p/[projectId]/beads/stream/route.ts`: SSE route subscription.
 - `hooks/use-beads-stream.ts`: EventSource connection and invalidation of issue/activity queries; demo skips the stream.
 - `lib/sse-registry.ts` and `instrumentation-node.ts`: registered stream closure on shutdown so indefinitely open requests do not prevent server exit.
+- `lib/agent-projection.ts`, `lib/agent-watch.ts` and `hooks/use-agents.ts`: separate agent snapshot/history observation and browser invalidation. Presence changes must not invoke Beads or reload conversation bodies; agent streams share the shutdown registry.
 
 ## 4. Contracts and data shape
 

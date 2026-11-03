@@ -59,7 +59,7 @@ These commands describe alternatives; they do not require running both servers t
 4. The updater fast-forwards source, runs locked `npm ci --include=dev --no-audit --no-fund`, then `npm run build`. A later failure can leave source already advanced: this is not an atomic rollback transaction.
 5. A supervised successful update schedules exit code 75 and relaunch. Without supervision, the result does not promise an automatic restart.
 
-- contract: Update capabilities in the app do not authorize an agent to invoke them. Follow this repository's explicit no-commit/no-push and no-unrequested-restart policy.
+- contract: Update capabilities in the app do not authorize an agent to invoke them. Follow the active Git and restart authorization in `AGENTS.md` and the current task.
 
 ### Optional integrations and data exposure
 
@@ -73,6 +73,13 @@ These commands describe alternatives; they do not require running both servers t
 - contract: Usage events contain random installation/event IDs, app version, timestamp, and profile/GeoIP-disabling flags, not issue content, project paths, or browser request headers. The receiver still observes the server's network IP.
 - contract: Telemetry retries keep the day's event identity, at most three attempts spaced at least ten minutes apart; no backfill of earlier days. Failures must not interrupt app use. See [README usage-statistics details](../../README.md#basic-usage-statistics).
 - contract: This repository's own Beads data is local-only. Showcase/publish features and CLI advisories do not authorize deploying it, adding a Dolt remote, or pushing tracker data.
+
+### Agent Workspace runtime boundary
+
+- contract: The existing pi_qr extension in `/apps/pi_quality_runtime` alone publishes presence, owns coordinator mail and settings, and mirrors native owner-worker facts. Beadswebui adds no Pi extension installation, daemon, network mailbox listener or worker scheduler. See [Agent Workspace](agent-workspace.md).
+- contract: Coordinator mail is local runtime storage, independent of a running browser/web app. Containers or different OS users need deliberate access to the same sanitized state root and registry; do not create a disconnected second bus to mask unavailable data.
+- contract: Source integration/builds do not activate existing Pi processes or managed worker snapshots. Use the runtime's owning-process release/activation procedure; never reload or stop unrelated live workers to verify web documentation.
+- contract: Agent history is browser-read-only. Existing host/origin checks are not authentication and do not authorize browser send, wake-settings mutation or execution controls. Mail inserted into Pi context can reach its configured model provider; local storage is not a guarantee of offline processing.
 
 ### Network binding
 

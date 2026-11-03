@@ -36,12 +36,16 @@
 | Issues, dependencies, comments, workflow state | Selected repository's `.beads` data, accessed through `bd` | `lib/bd.ts` |
 | Images | Selected repository's `.beads/attachments` directory | `app/api/p/[projectId]/attachments/route.ts` |
 | Activity input | Selected repository's `.beads/interactions.jsonl`, read alongside issue data | `lib/interactions.ts` |
+| Agent presence, pending mail and retained messages/receipts | `$XDG_STATE_HOME/pi-quality-runtime/agents/v1`, default `~/.local/state/pi-quality-runtime/agents/v1` | Existing pi_qr extension; app reads sanitized projection only |
+| Agent wake policy and revision | `$XDG_CONFIG_HOME/pi-quality-runtime/agent-workspace.json`, default `~/.config/pi-quality-runtime/agent-workspace.json` | pi_qr user commands; no browser mutation |
 | Themes, default view, board display/update preferences | Browser localStorage | [UI state](ui-state.md) |
 | Effective viewer mode | HTTP-only session cookie `scotty-viewer-mode`, overriding the environment default | `app/api/viewer-mode/route.ts` |
 | Usage-statistics preference, installation ID, daily delivery records | Separate telemetry files in the app config directory | `app/api/telemetry/route.ts` and `lib/telemetry.ts` |
 
 - contract: The app config directory is `$XDG_CONFIG_HOME/bead-me-up-scotty`, or `~/.config/bead-me-up-scotty` when the variable is unset.
-- contract: Configuration is cached in the server process. Its writes are best-effort: a failed disk write can still leave a setting effective for the current process. A successful settings response is not proof of durable storage.
+- contract: pi_qr reads only project IDs/paths from this registry; it does not reconstruct IDs or own another registry. Agent message attribution is fixed at acceptance. See [Agent Workspace](agent-workspace.md) for canonical worktree mapping, exact identity and read isolation.
+- contract: Runtime `agentMessaging.autoWake` defaults on with a uniquely persisted revision; invalid/unreadable settings suppress wake. Revision changes never make already-received backlog wakeable. This setting is separate from app config PUT and never wakes workers.
+- contract: App configuration in `lib/config.ts` is cached in the server process. Its writes are best-effort: a failed disk write can still leave an app setting effective for the current process. A successful app-settings response is not proof of durable storage; this is not the runtime wake-policy persistence contract.
 - contract: Manual column order is a project/column-to-issue-ID mapping in app configuration, not an issue field.
 - contract: Global settings PUT accepts `humanActor`, `humanAllowlist`, `pollIntervalMs` (1,000–300,000), and `gamification`; registry/order use their own endpoints.
 - contract: Defaults are a 30,000 ms fallback poll and gamification disabled. Actor defaults follow `BEADS_ACTOR`, Git `user.name`, then OS username; the initial human allowlist contains that actor. Explicitly saved actor choices are retained.
@@ -54,7 +58,8 @@
 | `BD_BIN` | Beads executable; default `bd`. |
 | `BEADS_ACTOR` | Default actor candidate; a saved actor choice takes precedence. |
 | `BEADS_REPO` | Legacy initial registry migration input, not a per-request project override. |
-| `XDG_CONFIG_HOME` | Base directory for server settings and telemetry state. |
+| `XDG_CONFIG_HOME` | Base directory for app settings/telemetry and the separately runtime-owned agent wake settings. |
+| `XDG_STATE_HOME` | Base directory for the sanitized pi_qr agent state read by the app; both owners must resolve the same local root. |
 | `SCOTTY_READ_ONLY` | `1` or `true` defaults new browser sessions to viewer mode; their session cookie can override it. |
 | `SCOTTY_ALLOWED_HOSTS` | Comma-separated allowed hostnames; see [operations](operations.md) before exposing the server. |
 | `SCOTTY_LANE_PREFIX` | Optional Focus-view label prefix, for example `ctx:`. |

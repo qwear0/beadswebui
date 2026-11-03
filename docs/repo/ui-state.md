@@ -15,6 +15,8 @@
 - code: `lib/views.ts`, `hooks/use-last-view.ts`, and `hooks/use-default-view.ts` — view selection/defaults.
 - code: `hooks/use-url-state.ts`, `hooks/use-url-filters.ts`, and `lib/filters.ts` — bookmarkable state and shared Board/List filters.
 - code: `hooks/use-beads.ts`, `hooks/use-beads-stream.ts`, and `hooks/use-order.ts` — queries, live invalidation, and manual ordering.
+- code: `hooks/use-agents.ts`, `hooks/use-agent-filters.ts`, and `lib/agent-ui.ts` — isolated runtime queries, URL cross-filters and explicit project/bead linkage.
+- entrypoint: `components/agents-view.tsx` and `components/agent-conversation.tsx` — fleet and read-only paged mail; `components/agent-summary.tsx` — shared pipeline, cross-filters and detail links.
 - code: `components/board/board.tsx`, `hooks/use-board-prefs.ts`, and `components/theme-provider.tsx` — board interaction/preferences and per-project themes.
 
 ## 3. Main flow
@@ -30,7 +32,7 @@
 
 ### Navigation and filters
 
-- contract: Views are defined in `lib/views.ts`: Board, Focus, List, Epics, Graph, Insights, Activity, Needs You, Achievements, Publish, and Settings. Achievements navigation is gated by the gamification setting.
+- contract: Views are defined in `lib/views.ts`: Board, Focus, List, Epics, Graph, Insights, Activity, Agents, Needs You, Achievements, Publish, and Settings. Achievements navigation is gated by the gamification setting.
 - contract: Board/List facets use repeated `status`, `type`, `priority`, `origin`, `label`, and `assignee` parameters; free text uses `q`. Values are OR within a facet and AND across facets.
 - contract: Empty facet arrays mean unrestricted. An explicitly empty `assignee` query value means Unassigned; it must not be discarded as an absent value.
 - contract: `archived=1` is the dedicated archived-state toggle. The `archived` label is not offered as an ordinary label facet.
@@ -42,6 +44,15 @@ Example bookmark using a registered project ID:
 ```text
 /p/{projectId}?view=list&status=open&priority=1&assignee=&q=release
 ```
+
+### Agent Workspace navigation and live state
+
+- contract: Agent cross-filters use `agent`, `instance`, `epic`, `issue`, `thread` and `agentProject` URL parameters. Runtime identity filters are not assignees/historical actors; project-qualified explicit bead linkage connects the fleet to Activity/Focus and issue detail. Epic membership uses descendants, not dependency-graph neighbors.
+- contract: Agents defaults to the current project; `agentProject=all` selects all registered projects, while Demo stays isolated. Epic/issue filters and pipeline counts still refer to the shell's current project, not an aggregate Beads query.
+- contract: Fleet liveness, work state, conflict and parent-instance uncertainty remain separate. Pipeline totals include every observed Beads status, including unknown values. Agent telemetry/messages do not become issue Activity events or Needs You requests.
+- contract: Conversations are read-only and paged. Filters apply to loaded thread context, not an exhaustive history search; message facts and linked replies are observations, not a mandatory linear delivery progression. See [Agent Workspace](agent-workspace.md).
+- contract: Query keys begin with `agents` and include project/global scope, then snapshot, conversations or messages/thread. They do not share issue/activity keys. Hooks share a reference-counted EventSource per query client/scope; presence/policy revisions invalidate snapshots, history revisions invalidate conversations/messages, never Beads.
+- contract: Browser agent snapshots poll every 15 seconds without a live stream and 45 seconds with one; browser history interval polling is 60 seconds only while disconnected. Separately, server history recovery emits a revision signal every 60 seconds without scanning retained bodies/indexes; it is not driven by presence heartbeats. Reconnect backs off to 30 seconds. Demo opens no agent stream and shows no real mail; connected transport alone is not proof of healthy publication.
 
 ### Preference and ordering locations
 
@@ -56,8 +67,8 @@ Example bookmark using a registered project ID:
 - contract: The theme provider's server snapshot is Light. Hydration first matches that snapshot, then applies the saved theme through `data-theme` and the `dark` class. Do not read browser storage unguarded during server rendering.
 - contract: Preference hooks use local/custom storage notifications so changes can reach consumers in the current and other browser tabs; these are not Beads/SSE events.
 - contract: Order mutations optimistically update the project order cache, restore the previous value on failure, show an error, then invalidate the order query.
-- contract: SSE is signal-only and invalidates issue/activity data, not every query. Issues poll using response metadata (5 seconds before metadata); activity uses its own 20-second interval. The configured default issue fallback is 30 seconds.
-- contract: The server's watch is shared and non-recursive, with a 200 ms debounce. Nested Dolt rewrites from a read must not trigger another fetch loop. A connected stream alone does not prove its filesystem watch is working.
+- contract: Beads SSE is signal-only and invalidates issue/activity data, not every query. Issues poll using response metadata (5 seconds before metadata); activity uses its own 20-second interval. The configured default issue fallback is 30 seconds.
+- contract: The server's Beads watch is shared and non-recursive, with a 200 ms debounce. Nested Dolt rewrites from a read must not trigger another fetch loop. A connected stream alone does not prove its filesystem watch is working.
 
 ## 5. Verification and failure clues
 

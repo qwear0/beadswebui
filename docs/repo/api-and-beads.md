@@ -39,6 +39,8 @@ The following paths are relative to `/api/p/{projectId}`. This is a route-family
 | `/beads/{id}/human` | POST | Respond to or dismiss a human-attention request. |
 | `/beads/{id}/assist` | POST | Ask the optional Claude CLI for suggestions; does not itself apply them. |
 | `/beads/stream` | GET | Signal-only SSE change notifications, not issue snapshots. |
+| `/agents`, `/agents/stream` | GET | Sanitized agent snapshot/policy and separate revision-only SSE. |
+| `/agents/conversations`, `/agents/conversations/{threadId}` | GET | Paged read-only conversation summaries and thread messages/independent receipt facts. |
 | `/doctor` | GET | Project/store diagnostic information. |
 | `/activity`, `/insights`, `/gamification` | GET | Derived activity and dashboard data. |
 | `/order` | GET, PUT | Read or replace a column's saved manual ordering. |
@@ -58,6 +60,14 @@ App-level routes are `/api/projects` (GET/POST), `/api/projects/{id}` (PATCH/DEL
 - contract: Dependencies from flat export records and expanded show results normalize to a single dependency-link shape. Expanded issue timestamps must not become link timestamps.
 - contract: Backlog creation maps to Beads `deferred`. Closing uses the dedicated CLI close path so a reason is recorded at close time, not as an unrelated later update.
 - contract: Image uploads use multipart fields `file` and `beadId`, accept image MIME types up to 15 MiB, and return an `attachment://` reference plus a project-scoped URL. Demo has no attachment folder.
+
+### Agent read boundary
+
+- contract: The same GET snapshot/stream/conversation route family exists globally under `/api/agents`. It reads sanitized pi_qr files, not Beads or private lifecycle storage; there are no send/settings/control mutations. See [Agent Workspace](agent-workspace.md).
+- contract: `lib/agent-projection.ts` validates bounded regular records and refuses unsafe paths/symlinks. Current registration is reread for server-side scope checks; both participant projects must remain registered, and a project route returns only messages attributed to that project. Global results deduplicate canonical message IDs. Global presence hides unlinked session details and reports only a bounded count diagnostic.
+- contract: History requests accept `cursor` and `limit` (1–100). Web cursors bind current registry/scope, selected thread and a fixed high-water boundary; invalid or mismatched cursors are errors, never authority to read another scope. Bounded scans can return no matching items with a next cursor; continue paging rather than assuming history is empty.
+- contract: Conversation summaries and answeredBy are bounded observations, not a complete thread scan. Receipt facts distinguish memory from persisted context and native ACK from generic acknowledgement; a missing fact is not a negative delivery verdict.
+- contract: Agent responses distinguish available, unavailable and demo, with structured source-specific errors. Missing settings mean the runtime default is autoWake=true, with a null/uninitialized revision and diagnostic, not evidence that wake is active. Invalid/unreadable settings remain unknown/error, not an enabled fallback. The app never initializes runtime settings or fabricates a persisted effective revision.
 
 ### CLI boundary
 
