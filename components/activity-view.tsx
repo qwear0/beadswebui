@@ -19,7 +19,7 @@ import { AgentCrossFilters, AgentStatusNotice, PipelineSummary } from "@/compone
 export function ActivityView() {
   const { projectId, beads, loading, error: beadsError, openDetail, selectedBeadId, selectBead } = useApp();
   const { data, isLoading, error } = useActivity(projectId);
-  const agents = useAgents(projectId === "all" ? undefined : projectId);
+  const agents = useAgents(projectId);
   const { filters } = useAgentFilters();
   const scopedBeads = filterAgentBeads(beads, agents.data?.agents ?? [], projectId, filters);
   const ids = new Set(scopedBeads.map(bead => bead.id));

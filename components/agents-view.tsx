@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useApp } from "@/components/app-context";
 import { useAgents } from "@/hooks/use-agents";
 import { useProjects } from "@/hooks/use-projects";
-import { useAgentFilters } from "@/hooks/use-agent-filters";
+import { ALL_AGENT_PROJECTS, useAgentFilters } from "@/hooks/use-agent-filters";
 import { AgentConversation } from "@/components/agent-conversation";
 import { AgentCrossFilters, AgentFleetSummary, AgentStatusNotice, PipelineSummary, agentControlClass } from "@/components/agent-summary";
 import { agentKey, elapsedTime, epicInsideIds, filterAgentBeads, groupAgents, matchesAgent } from "@/lib/agent-ui";
@@ -16,7 +16,7 @@ export function AgentsView() {
   const { filters, setFilters } = useAgentFilters();
   const projects = useProjects();
   const selectedProject = projectId === "demo" || meta?.kind === "demo" ? "demo" : filters.projectId ?? projectId;
-  const scope = selectedProject === "all" ? undefined : selectedProject;
+  const scope = selectedProject === ALL_AGENT_PROJECTS ? undefined : selectedProject;
   const query = useAgents(scope);
   const agents = query.data?.agents ?? [];
   const insideIds = React.useMemo(() => epicInsideIds(beads, filters.epicId), [beads, filters.epicId]);
@@ -38,9 +38,9 @@ export function AgentsView() {
       <div className="min-w-0 flex-1"><h1 className="text-base font-semibold">Agents</h1><p className="mt-1 text-xs text-muted-foreground">Runtime presence and read-only conversations · not inferred from Beads activity</p></div>
       <label className="flex min-w-0 flex-col gap-1 text-xs">Registered project scope
         <select className={agentControlClass} disabled={selectedProject === "demo"} value={selectedProject} onChange={event => setFilters({ projectId: event.target.value, agentId: null, instanceId: null, epicId: null, issueId: null, threadId: null })}>
-          <option value="all">All registered projects</option>
+          <option value={ALL_AGENT_PROJECTS}>All registered projects</option>
           {selectedProject === "demo" && <option value="demo">Demo · no runtime</option>}
-          {selectedProject !== "all" && selectedProject !== "demo" && !registered.some(project => project.id === selectedProject) && <option value={selectedProject}>{selectedProject}</option>}
+          {selectedProject !== ALL_AGENT_PROJECTS && selectedProject !== "demo" && !registered.some(project => project.id === selectedProject) && <option value={selectedProject}>{selectedProject}</option>}
           {registered.map(project => <option key={project.id} value={project.id}>{project.name} · {project.id}</option>)}
         </select>
       </label>

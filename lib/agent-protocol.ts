@@ -48,8 +48,9 @@ export interface AgentConversation {
   bead: AgentBeadRef | null;
   kind: "note" | "question" | "reply";
   preview: string;
-  startedAt: string;
-  /** Latest observation in this page, not a claim to have scanned all history. */
+  /** Root acceptance time only for a root-envelope summary; otherwise unknown. */
+  startedAt: string | null;
+  /** This envelope's acceptance/projection time, not a whole-thread update time. */
   updatedAt: string;
   transport: "coordinator_mail" | "native_projection";
 }

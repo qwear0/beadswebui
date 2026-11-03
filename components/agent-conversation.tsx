@@ -61,7 +61,7 @@ export function AgentConversation({ projectId, contextProjectId, insideIds, issu
             <span className="mt-1 block">{thread.preview || "No preview"}</span>
             <span className="mt-1 block text-muted-foreground">Participant projects: {thread.participantProjects.join(" ↔ ") || "unknown"}</span>
             <span className="block text-muted-foreground">{thread.transport === "native_projection" ? "Native owner-worker projection" : "Coordinator mailbox"}</span>
-            <time className="block text-muted-foreground">Latest observed in page: {thread.updatedAt}</time>
+            <time className="block text-muted-foreground">Latest matching message (loaded pages): {thread.updatedAt}</time>
           </button>
         </li>)}</ul>
         {!conversations.isLoading && !conversations.error && availability === "available" && visible.length === 0 && <p className="p-3 text-xs text-muted-foreground">No matching conversations in loaded pages.{conversations.hasNextPage ? " More history is available." : ""}</p>}

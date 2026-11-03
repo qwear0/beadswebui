@@ -3,6 +3,9 @@
 import * as React from "react";
 import { useUrlState } from "@/hooks/use-url-state";
 
+// UI/URL-only: ':' is outside the registered project-ID alphabet.
+export const ALL_AGENT_PROJECTS = ":all";
+
 export interface AgentFilters {
   agentId: string | null;
   instanceId: string | null;

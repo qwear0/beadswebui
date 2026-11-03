@@ -75,7 +75,7 @@ function laneOf(b: Bead, prefix: string): string | null {
 
 export function FocusView() {
   const { beads, index, meta, projectId, loading, error } = useApp();
-  const agents = useAgents(projectId === "all" ? undefined : projectId);
+  const agents = useAgents(projectId);
   const { filters } = useAgentFilters();
   const scopedBeads = filterAgentBeads(beads, agents.data?.agents ?? [], projectId, filters);
   const prefix = meta?.lanePrefix ?? null;

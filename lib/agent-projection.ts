@@ -373,7 +373,9 @@ export function readHistory(root: string, registry: Registry, projectId: string 
         // Precommit pointers are intentional; only a canonical envelope is accepted.
         if (envelope && allowed(envelope, registry, projectId)) {
           if (ids.get(message)!.some((p) => p !== envelope.senderProjectId && p !== envelope.recipientProjectId)) throw new AgentReadError("history_attribution_mismatch", "History pointer is outside message participant projects");
-          if (threadId ? envelope.threadId === threadId : envelope.threadId === envelope.messageId) envelopes.push(envelope);
+          // Replies can introduce bead context absent from the root. Keep each
+          // bounded envelope observation; the UI filters before thread deduplication.
+          if (!threadId || envelope.threadId === threadId) envelopes.push(envelope);
         }
       } catch (error) { errors.push(telemetry("history", error, message)); }
       if (envelopes.length >= limit || examined >= 256) {
@@ -393,7 +395,7 @@ export function readHistory(root: string, registry: Registry, projectId: string 
   const conversations: AgentConversation[] = envelopes.map((envelope) => ({
     threadId: envelope.threadId, participantProjects: [...new Set([envelope.senderProjectId, envelope.recipientProjectId])],
     participants: [envelope.sender, envelope.recipient], bead: envelope.bead, kind: envelope.kind,
-    preview: envelope.body.slice(0, 200), startedAt: envelope.acceptedAt, updatedAt: envelope.acceptedAt, transport: envelope.transport,
+    preview: envelope.body.slice(0, 200), startedAt: envelope.messageId === envelope.threadId ? envelope.acceptedAt : null, updatedAt: envelope.acceptedAt, transport: envelope.transport,
   }));
   return { messages, conversations, errors, nextCursor, watchPaths };
 }
