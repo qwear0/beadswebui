@@ -14,6 +14,7 @@
 - reads-after: `AGENTS.md` — operational rules, local-only data, verification, and conservative Git policy.
 - reads-after: `README.md` — installation, user-facing features, configuration, and launch modes.
 - reads-after: `docs/repo/runtime-flow.md` — browser/API/store/CLI flow and runtime boundaries.
+- reads-after: Choose the relevant narrow guide below: configuration, API/CLI contracts, browser state, or operations. Do not read every implementation file to answer a bounded question.
 - reads-after: `docs/repo/verification.md` — available checks, retired tests, and verification limits.
 - reads-after: `.agents/skills/beadswebui-doc-maintainer/SKILL.md` — documentation impact and audit workflow.
 - reads-after: Installed Next.js guides under `node_modules/next/dist/docs/` before framework code edits.
@@ -51,6 +52,10 @@
 
 - doc: `docs/repo/repo_structure.md` - repository navigation, ownership, and update triggers
 - doc: `docs/repo/runtime-flow.md` - UI/API/Beads flow, live refresh, configuration, and launchers
+- doc: `docs/repo/configuration.md` - project registration, settings, actor defaults, environment, and persistence locations
+- doc: `docs/repo/api-and-beads.md` - HTTP route families, data/error contracts, attachments, and CLI serialization
+- doc: `docs/repo/ui-state.md` - URL navigation, filters, detail trail, preferences, query caches, and themes
+- doc: `docs/repo/operations.md` - local/container launch modes, shutdown, self-update, and optional external integrations
 - doc: `docs/repo/verification.md` - retired test infrastructure, supported checks, and limitations
 
 ## 6. Verification and limits

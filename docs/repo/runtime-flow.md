@@ -16,13 +16,14 @@
 - `lib/schema.ts` defines data/input schemas. `lib/api.ts` centralizes API response helpers.
 - `lib/store.ts` selects a store; `lib/bd.ts` implements the local CLI adapter; `lib/demo-store.ts` implements demo behavior.
 - `lib/config.ts` owns application configuration and project lookup, separate from Beads issue data.
+- doc: [Configuration](configuration.md), [API and Beads](api-and-beads.md), [browser state](ui-state.md), and [operations](operations.md) provide the narrow contracts behind this overview.
 
 ## 3. Main flow
 
 1. The launcher/project page selects a project; components consume query/mutation hooks.
 2. Hooks call the browser API client, which addresses project-scoped route handlers.
 3. Routes resolve request parameters, apply relevant input/read-only checks, and select the store.
-4. The demo project resolves to the shared in-memory store. A real project resolves through configuration, CLI availability, and a cached per-project Beads store.
+4. The explicitly selected Demo project resolves to the shared in-memory store. A real project resolves through configuration, CLI availability, and a cached per-project Beads store; unavailable real stores return errors, never sample-data fallback.
 5. The CLI adapter invokes `BD_BIN` (default `bd`) with argument arrays and the selected repository as its working directory. It handles JSON envelopes and parses exported records using the shared schema.
 6. Server change notifications travel through the SSE route to browser query invalidation; interval refetching remains a fallback.
 
@@ -37,7 +38,8 @@ Live refresh anchors:
 
 - Browser -> API: keep `lib/api-client.ts`, hook expectations, route responses, and `lib/schema.ts` aligned.
 - API -> Beads: preserve project working directory, actor propagation, error codes, and JSON parsing. `lib/bd.ts` serializes CLI operations per repository, including reads that can rewrite embedded Dolt state.
-- Configuration: `lib/config.ts` stores app settings under `XDG_CONFIG_HOME`, falling back to the user's config directory, in a `bead-me-up-scotty` subdirectory. Manual board order is app configuration, not issue metadata.
+- Configuration: `lib/config.ts` stores app settings under `XDG_CONFIG_HOME`, falling back to the user's config directory, in a `bead-me-up-scotty` subdirectory. Manual board order is app configuration, not issue metadata. Browser themes/display preferences are localStorage state; viewer mode is session-cookie state.
+- Project lookup: the registry and request URL choose the real project. `BEADS_REPO` only participates in initial legacy-registry migration, not a runtime override of registered entries.
 - Request boundary: `proxy.ts` uses `lib/request-guard.ts`; do not infer that browser viewer state alone enforces server mutation restrictions.
 - Local tracker policy: this repository's issue data must remain local. Application publishing/update features do not authorize tracker synchronization.
 

@@ -89,8 +89,9 @@ npm, Docker) are below.
   delete (`bd delete`, behind a confirm).
 - **Human-vs-agent attribution** — every bead and comment shows 👤 (human) or 🤖
   (agent), derived from a configurable human allowlist.
-- **Settings** — repo path, human actor + allowlist, poll interval, and light/dark
-  theme. Live polling keeps the board fresh when agents change data underneath you.
+- **Settings** — human actor + allowlist, poll interval, themes, and display
+  preferences. Live change notifications and fallback polling keep views fresh
+  when agents change data underneath you.
 
 ### Focus: compare assignees and recent completions
 
@@ -117,7 +118,8 @@ detail links, and read-only protections also work in the grouped layout.
 - **beads has no HTTP API**, so the app shells out to the `bd` CLI
   (`bd … --json`, `BD_JSON_ENVELOPE=1`). `bd` stays the single source of truth —
   the app adds **zero** new persisted schema. The only adapter is
-  [`lib/bd.ts`](lib/bd.ts); see the spec in [`design/design.md`](design/design.md).
+  [`lib/bd.ts`](lib/bd.ts); see the current
+  [API and Beads integration guide](docs/repo/api-and-beads.md).
 - The UI was designed in **Claude Design** and rebuilt faithfully here with
   Next.js + shadcn/Tailwind. The original export and a screen/token map live in
   [`design/ui-export/`](design/ui-export/).
@@ -156,22 +158,27 @@ See [v0.2.0 release notes](docs/releases/v0.2.0.md) for the first versioned rele
 
 **Prerequisites:** Node 20+ and npm. For live mode you also need the
 [`bd`](https://github.com/gastownhall/beads) binary on your `PATH` and a `.beads`
-repo (`bd init`). No `bd`? The app falls back to demo mode automatically.
+repo (`bd init`). No `bd`? Select the built-in **Demo** project in the launcher;
+real projects report an error when their CLI/store is unavailable.
 
 ```bash
 npm install
 npm run dev            # http://localhost:3000
 ```
 
-- **With real data:** run from (or point Settings at) a directory containing a
-  `.beads` repo, with `bd` on your `PATH`. Override the repo with
-  `BEADS_REPO=/path/to/project` and the binary with `BD_BIN=/path/to/bd`.
-- **Demo mode:** if `bd` isn't installed (or you set `BEADS_DEMO=1`), the app runs
-  against an in-memory dataset seeded from the design export — so you can explore
-  every feature without beads. The sidebar shows which mode is active.
+- **With real data:** register an existing folder containing a `.beads` directory
+  in the project launcher, with `bd` on the server's `PATH`. Override the binary
+  with `BD_BIN=/path/to/bd`. `BEADS_REPO=/path/to/project` can seed the initial
+  registry migration; it does not override an already registered project.
+- **Demo project:** choose **Demo** in the launcher to explore an in-memory
+  dataset without installing Beads. It has no project folder, filesystem stream,
+  or attachment storage; changes are not durable. `BEADS_DEMO` is not an active
+  runtime setting, and unavailable real projects never silently become Demo.
 
-Set the human actor / allowlist, repo path, and theme in **Settings** (stored
-under your OS config dir, not in beads).
+Set the human actor / allowlist and global options in **Settings**. Server settings
+and project registration live under the OS config directory, outside Beads;
+themes and display preferences live in browser localStorage. See
+[configuration and persistence](docs/repo/configuration.md).
 
 ### Focus view
 
@@ -266,9 +273,11 @@ config dir to keep them:
 
 Container limitations:
 
-- The image has no `git`, so Dolt remote sync (`refs/dolt/data`) and `bd init`
-  don't work inside it — run those on the host. UI edits (create/update/close)
-  work fine; they just won't auto-push until you sync from the host.
+- Mount an existing, initialized Beads project; the image does not supply `git`
+  or a source checkout for in-app Git updates. UI edits use the mounted local
+  database. This repository's own tracker is deliberately **local-only**: do not
+  configure a Dolt remote, push issue data, or treat a missing remote as a defect.
+  See [the local-only policy](AGENTS.md#beads-data-is-local-only--never-sync-it).
 - **Refine with AI** shells out to the Claude Code CLI, which isn't bundled;
   the button shows an error in the container.
 - The bundled `bd` version is pinned in the Dockerfile (`ARG BD_VERSION`);
@@ -330,7 +339,7 @@ app/                  # App Router pages + API route handlers
   api/projects/      # project registration and lookup
   api/config/        # application configuration
 lib/
-  bd.ts               # the ONLY bd CLI bridge (execFile, JSON envelope, write mutex)
+  bd.ts               # bd CLI bridge (execFile, JSON envelope, per-repo read/write serialization)
   demo-store.ts       # explicit in-memory demo project
   store.ts            # picks bd vs demo
   schema.ts           # Zod schemas + types (bd data model)
@@ -339,8 +348,20 @@ lib/
 components/           # sidebar, board (dnd), detail drawer, create modal, epics, graph, settings
 ```
 
-For current ownership, runtime contracts, and agent navigation, read the
-[repository structure map](docs/repo/repo_structure.md). Documentation maintenance
+## Documentation
+
+Start with the [repository structure map](docs/repo/repo_structure.md) for ownership,
+source anchors, and reading order. Current developer/operator guides:
+
+- [Runtime flow](docs/repo/runtime-flow.md) — browser, API, store, CLI, and live-refresh boundaries.
+- [Configuration and persistence](docs/repo/configuration.md) — project registration, settings, actors, environment variables, and data locations.
+- [HTTP API and Beads integration](docs/repo/api-and-beads.md) — route families, input semantics, errors, and CLI serialization.
+- [Browser state](docs/repo/ui-state.md) — navigation, filters, detail trail, themes, query caches, and ordering.
+- [Operations](docs/repo/operations.md) — launch modes, Docker boundaries, updates, and optional external integrations.
+- [Verification policy](docs/repo/verification.md) — available checks and their limits; automated tests remain retired.
+
+Release notes and design plans under `docs/releases/` and `docs/superpowers/` are
+historical context, not current operating instructions. Documentation maintenance
 uses the repository-local
 [beadswebui-doc-maintainer skill](.agents/skills/beadswebui-doc-maintainer/SKILL.md).
 
