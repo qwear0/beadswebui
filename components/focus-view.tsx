@@ -5,6 +5,10 @@ import { Icon, typeIconName } from "@/components/icons";
 import { PriorityChip } from "@/components/board/bead-card";
 import { isBlocked, blockingDeps, relTime, fmtDateTime, typeColor, catColor } from "@/lib/beads-view";
 import type { Bead } from "@/lib/schema";
+import { useAgents } from "@/hooks/use-agents";
+import { useAgentFilters } from "@/hooks/use-agent-filters";
+import { filterAgentBeads } from "@/lib/agent-ui";
+import { AgentCrossFilters, AgentStatusNotice, PipelineSummary } from "@/components/agent-summary";
 
 /**
  * Focus — "what's happening now". Three fixed columns cut by status × priority:
@@ -70,17 +74,17 @@ function laneOf(b: Bead, prefix: string): string | null {
 }
 
 export function FocusView() {
-  const { beads, index, meta } = useApp();
+  const { beads, index, meta, projectId, loading, error } = useApp();
+  const agents = useAgents(projectId === "all" ? undefined : projectId);
+  const { filters } = useAgentFilters();
+  const scopedBeads = filterAgentBeads(beads, agents.data?.agents ?? [], projectId, filters);
   const prefix = meta?.lanePrefix ?? null;
   const [groupBy, setGroupBy] = React.useState<"none" | "assignee">("none");
   const [showRecent, setShowRecent] = React.useState(false);
   const [showAllRecent, setShowAllRecent] = React.useState(false);
   const [lane, setLane] = React.useState<string | null>(null); // null = all, "" = unlabeled
 
-  const active = React.useMemo(
-    () => beads.filter((b) => !(b.labels ?? []).includes(ARCHIVED)),
-    [beads],
-  );
+  const active = scopedBeads.filter((b) => !(b.labels ?? []).includes(ARCHIVED));
 
   const lanes = React.useMemo(() => {
     if (!prefix) return [];
@@ -175,7 +179,11 @@ export function FocusView() {
           </div>
         )}
       </header>
-
+      <div className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border">
+        <AgentCrossFilters agents={agents.data?.agents ?? []} unavailable={!!agents.error || agents.data?.availability === "unavailable"} />
+        {(filters.agentId || filters.instanceId) && <AgentStatusNotice data={agents.data} isLoading={agents.isLoading} error={agents.error} />}
+        <div className="space-y-1 px-4 py-2"><PipelineSummary beads={active.filter(inLane)} loading={loading} error={error} /><p className="text-[11px] text-muted-foreground">Pipeline includes every status in this non-archived scope and lane, even when it has no Focus column. Runtime links are explicit context; issue assignees are unchanged.</p></div>
+      </div>
       {showRecent && (
         <div className="flex flex-shrink-0 flex-wrap items-center gap-3 border-b border-border px-[22px] py-2 text-[12px] text-[var(--text-2)]">
           <span aria-live="polite">Showing {recentItems.length} of {recentlyFinished.length} completed beads</span>

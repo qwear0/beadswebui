@@ -13,6 +13,7 @@ import {
 import { Icon, typeIconName } from "@/components/icons";
 import { OriginBadge, PriorityChip } from "@/components/board/bead-card";
 import { CopyableId } from "@/components/copyable-id";
+import { BeadAgentLinks } from "@/components/agent-summary";
 import { useApp, type DetailAction } from "@/components/app-context";
 import { useImageDrop } from "@/hooks/use-image-drop";
 import { useResizableWidth } from "@/hooks/use-resizable-width";
@@ -1018,6 +1019,8 @@ function DrawerBody({
             />
           </Section>
         )}
+
+        <BeadAgentLinks beadId={bead.id} onNavigate={onClose} />
 
         {/* Comments */}
         <Section>

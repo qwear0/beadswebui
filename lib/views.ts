@@ -1,4 +1,4 @@
-export const VIEWS = ["board", "focus", "list", "epics", "graph", "insights", "activity", "needsyou", "achievements", "publish", "settings"] as const;
+export const VIEWS = ["board", "focus", "list", "epics", "graph", "insights", "activity", "agents", "needsyou", "achievements", "publish", "settings"] as const;
 export type View = (typeof VIEWS)[number];
 export function isView(value: string | null | undefined): value is View {
   return typeof value === "string" && (VIEWS as readonly string[]).includes(value);
@@ -18,6 +18,7 @@ const VIEW_NAV: ViewNavItem[] = [
   { key: "graph", label: "Graph", icon: "graph" },
   { key: "insights", label: "Insights", icon: "milestone" },
   { key: "activity", label: "Activity", icon: "comment" },
+  { key: "agents", label: "Agents", icon: "user" },
   { key: "needsyou", label: "Needs You", icon: "user" },
   { key: "achievements", label: "Achievements", icon: "feature" },
   { key: "publish", label: "Publish", icon: "rocket" },

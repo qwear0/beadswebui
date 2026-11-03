@@ -17,6 +17,7 @@ import { EpicsView } from "@/components/epics-view";
 import { GraphView } from "@/components/graph-view";
 import { InsightsView } from "@/components/insights-view";
 import { ActivityView } from "@/components/activity-view";
+import { AgentsView } from "@/components/agents-view";
 import { NeedsYouView } from "@/components/needs-you-view";
 import { AchievementsView } from "@/components/achievements-view";
 import { PublishView } from "@/components/publish-view";
@@ -51,7 +52,13 @@ export function AppShell({ projectId }: { projectId: string }) {
     return seed ? [seed] : [];
   });
   const rawOpenId = openStack.length ? openStack[openStack.length - 1] : null;
-  const [selectedBeadId, selectBead] = React.useState<string | null>(null);
+  const [rawSelectedBeadId, selectBead] = React.useState<string | null>(null);
+  // A runtime row is not an issue-selection target, including on browser Back.
+  const selectedBeadId = view === "agents" ? null : rawSelectedBeadId;
+  const changeView = React.useCallback((next: View) => {
+    if (next === "agents") selectBead(null);
+    setView(next);
+  }, [setView]);
   const detailNonce = React.useRef(0);
   const [detailRequest, setDetailRequest] = React.useState<{
     id: string;
@@ -185,9 +192,9 @@ export function AppShell({ projectId }: { projectId: string }) {
 
   const errorMessage = error ? (error as Error).message : undefined;
   const setMobileView = React.useCallback((next: View) => {
-    setView(next);
+    changeView(next);
     setMobileNavOpen(false);
-  }, [setView]);
+  }, [changeView]);
   React.useEffect(() => {
     const desktop = window.matchMedia("(min-width: 48rem)");
     const onChange = (event: MediaQueryListEvent) => {
@@ -254,13 +261,13 @@ export function AppShell({ projectId }: { projectId: string }) {
         <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           view={view}
-          onView={setView}
+          onView={changeView}
           kind={data?.meta?.kind}
           projectId={projectId}
           live={live}
         />
         <main className="relative flex min-w-0 flex-1 flex-col">
-          {errorMessage && view !== "settings" ? (
+          {errorMessage && view !== "settings" && view !== "agents" ? (
             <div className="flex flex-1 items-center justify-center p-8">
               <div className="max-w-md rounded-lg border border-destructive/40 bg-destructive/5 p-6 text-center">
                 <p className="text-sm font-medium text-destructive">Couldn’t open this project</p>
@@ -284,6 +291,7 @@ export function AppShell({ projectId }: { projectId: string }) {
               {view === "graph" && <GraphView />}
               {view === "insights" && <InsightsView />}
               {view === "activity" && <ActivityView />}
+              {view === "agents" && <AgentsView />}
               {view === "needsyou" && <NeedsYouView />}
               {view === "achievements" && <AchievementsView />}
               {view === "publish" && <PublishView />}
@@ -318,7 +326,7 @@ export function AppShell({ projectId }: { projectId: string }) {
         // Until the beads load, openId is still the raw ?bead= value from the URL.
         openId={openId && index.has(openId) ? openId : null}
         selectIdAction={selectBead}
-        setViewAction={setView}
+        setViewAction={changeView}
         openDetailAction={openDetail}
         openCreateAction={openCreateFromKeyboard}
         closeOverlaysAction={closeOverlays}
