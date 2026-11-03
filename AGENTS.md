@@ -46,9 +46,9 @@ This project-owned section governs verification, including the generic quality-g
 - The existing local-only Beads export guidance below remains valid; do not introduce remote synchronization or publish issue data.
 
 ## Git
-Preserve this repository's conservative policy: do not commit or push unless the user explicitly authorizes it. Do not inherit automatic commit, push, or rebuild instructions from another repository.
-Never commit ignored files. Report changed files, checks, and remaining limits at handoff.
-Build only when relevant to the task, using `npm run build`; this checkout has no project `build.sh`. Do not restart or deploy the app merely because documentation changed.
+If there were code edits, create a commit with a description in Russian and push it.
+After this, if it makes sense and if git status clean, trigger a project rebuild with the command `bash build.sh` and finish the work; do not wait for it to complete.
+Never commit files in folders added to `.gitignore`.
 
 ## General Instructions
 Use English for code, comments, and documentation; the final answer must be in Russian.
@@ -197,7 +197,6 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 **Critical rules:**
 - Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 

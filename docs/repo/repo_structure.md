@@ -11,7 +11,7 @@
 
 ## 2. Read first
 
-- reads-after: `AGENTS.md` — operational rules, local-only data, verification, and conservative Git policy.
+- reads-after: `AGENTS.md` — operational rules, local-only data, verification, and Git policy.
 - reads-after: `README.md` — installation, user-facing features, configuration, and launch modes.
 - reads-after: `docs/repo/runtime-flow.md` — browser/API/store/CLI flow and runtime boundaries.
 - reads-after: Choose the relevant narrow guide below: configuration, API/CLI contracts, browser state, or operations. Do not read every implementation file to answer a bounded question.
@@ -84,4 +84,4 @@
 - check: Both ends of changed UI/API/CLI contracts were inspected; graph edges alone are not proof.
 - check: Current docs remain concise and the documentation audit passes.
 - check: Report checks actually run, results, and unverified behavior; do not equate type/lint/audit success with runtime correctness.
-- check: Preserve existing generated agent blocks and the local-only Beads policy; do not commit or push without authorization.
+- check: Preserve generated agent blocks unless explicitly asked to edit them, preserve the local-only Beads policy, and follow the Git policy in `AGENTS.md`.
