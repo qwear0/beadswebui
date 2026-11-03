@@ -325,12 +325,13 @@ TanStack Query (polling + optimistic DnD) · dnd-kit (board) · @xyflow/react
 ## Project layout
 
 ```
-app/                  # pages + API route handlers (the only server entry points)
-  api/beads/**        # GET list, POST create, [id] PATCH/DELETE, status, comments, deps, archive
-  api/doctor, config  # bd preflight + local config
+app/                  # App Router pages + API route handlers
+  api/p/[projectId]/  # project-scoped beads, doctor, activity, publishing, and more
+  api/projects/      # project registration and lookup
+  api/config/        # application configuration
 lib/
   bd.ts               # the ONLY bd CLI bridge (execFile, JSON envelope, write mutex)
-  demo-store.ts       # in-memory fallback seeded from the export
+  demo-store.ts       # explicit in-memory demo project
   store.ts            # picks bd vs demo
   schema.ts           # Zod schemas + types (bd data model)
   beads-view.ts       # pure view-model helpers (status/priority colors, blocked, epic progress)
@@ -338,12 +339,29 @@ lib/
 components/           # sidebar, board (dnd), detail drawer, create modal, epics, graph, settings
 ```
 
+For current ownership, runtime contracts, and agent navigation, read the
+[repository structure map](docs/repo/repo_structure.md). Documentation maintenance
+uses the repository-local
+[beadswebui-doc-maintainer skill](.agents/skills/beadswebui-doc-maintainer/SKILL.md).
+
 ## Verify
 
+Automated tests and their test-only tooling are retired in this workspace.
+Do not add or restore tests unless explicitly requested. GitHub Actions are not
+part of the workspace verification workflow.
+
+Choose the least costly checks relevant to the change:
+
 ```bash
-npm run build         # typecheck + production build
-npm run lint          # eslint
+npm run lint
+./node_modules/.bin/tsc --noEmit --incremental false
+python3 .agents/skills/beadswebui-doc-maintainer/scripts/audit_beadswebui_docs.py .
 ```
+
+Use `npm run build` when production build/package integration is relevant, not
+as a routine documentation check. Direct CLI/API/UI observations may complement
+static checks; do not recreate a test suite as temporary diagnostics. See
+[verification policy and limits](docs/repo/verification.md).
 
 ## Security
 
@@ -399,14 +417,12 @@ active **installations**, not people: multiple machines count separately, shared
 servers count once, and offline or opted-out installations are absent. Deleting the preference file restores the default setting; deleting the ID file
 resets the installation identity.
 
-Verify the capture and privacy rules with `node scripts/test-telemetry.mjs`
-(Node 22.18+ for native TypeScript support). The tests use temporary local storage
-and a fake network transport; they do not send production events.
-
-For the Settings browser checks, start an isolated server with
-`XDG_CONFIG_HOME=/tmp/scotty-usage-test POSTHOG_KEY='' BEADS_DEMO=1 SCOTTY_READ_ONLY=1 npm run start -- --port 3197`,
-then run `SCOTTY_TEST_URL=http://localhost:3197 node scripts/test-telemetry-ui.mjs`.
-The test refuses to run against an installation configured to send events.
+The former telemetry test scripts have been retired with the automated suite.
+For changes here, inspect `lib/telemetry.ts`, `app/api/telemetry/route.ts`, and
+`components/usage-statistics.tsx`, and follow the
+[verification policy](docs/repo/verification.md). Any direct UI observation
+should use reporting disabled with an explicitly empty `POSTHOG_KEY`; static
+checks alone do not prove capture or privacy behavior.
 
 ## A small usage signal, and a thank you
 

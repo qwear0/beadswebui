@@ -1,0 +1,4 @@
+interface:
+  display_name: "Beadswebui Doc Maintainer"
+  short_description: "Source-grounded Beadswebui documentation"
+  default_prompt: "Use $beadswebui-doc-maintainer to assess documentation impact with bounded semantic retrieval and update only the required Beadswebui maps, contracts, and verification guidance."

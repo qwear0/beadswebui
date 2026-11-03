@@ -13,9 +13,6 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
 # next.js
 /.next/
 /out/
@@ -55,6 +52,7 @@ next-env.d.ts
 # Beads / Dolt files (added by bd init)
 # .beads holds local tracker state (embedded Dolt DB, config, logs) — not app source.
 .beads/
+.beads.gate.lock*
 .dolt/
 *.db
 .beads-credential-key
@@ -62,3 +60,9 @@ next-env.d.ts
 # Claude Code git worktrees — transient working copies of the repo, never source.
 # (Other .claude/ files like commands/ and settings.json stay tracked.)
 .claude/worktrees/
+
+# Agent task artifacts (plans, reports, and verification evidence)
+/tmp/
+
+# Python bytecode from local documentation maintenance tools
+__pycache__/
