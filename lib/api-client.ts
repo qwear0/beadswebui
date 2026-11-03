@@ -1,5 +1,7 @@
 import type { Bead, CreateInput, UpdateInput, DepType } from "./schema";
 import type { UpdateStatus, UpdateResult, UpdateChannel, UpdateTarget } from "./update-types";
+import type { AgentsResponse, AgentConversationsResponse, AgentMessagesResponse, AgentPageOptions } from "./agent-protocol";
+export type { AgentsResponse, AgentSnapshot, AgentConversation, AgentMessage, AgentReceipt, AgentConversationsResponse, AgentMessagesResponse, AgentPageOptions } from "./agent-protocol";
 
 export interface Meta {
   kind: "bd" | "demo";
@@ -153,8 +155,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 const enc = encodeURIComponent;
 const base = (projectId: string) => `/api/p/${enc(projectId)}`;
+export const agentsBase = (projectId?: string) => projectId ? `${base(projectId)}/agents` : "/api/agents";
+function agentPageQuery(options: AgentPageOptions = {}): string {
+  const params = new URLSearchParams();
+  if (options.cursor) params.set("cursor", options.cursor);
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  return params.size ? `?${params}` : "";
+}
 
 export const api = {
+  agents: (projectId?: string) => request<AgentsResponse>(agentsBase(projectId), { cache: "no-store" }),
+  agentConversations: (projectId?: string, options?: AgentPageOptions) =>
+    request<AgentConversationsResponse>(`${agentsBase(projectId)}/conversations${agentPageQuery(options)}`, { cache: "no-store" }),
+  agentMessages: (threadId: string, projectId?: string, options?: AgentPageOptions) =>
+    request<AgentMessagesResponse>(`${agentsBase(projectId)}/conversations/${enc(threadId)}${agentPageQuery(options)}`, { cache: "no-store" }),
   viewerMode: () => request<{ readOnly: boolean }>("/api/viewer-mode", { cache: "no-store" }),
   setViewerMode: (readOnly: boolean) => request<{ readOnly: boolean }>("/api/viewer-mode", {
     method: "PUT", body: JSON.stringify({ readOnly }),
