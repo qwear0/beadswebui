@@ -56,7 +56,7 @@ export interface AgentConversation {
 export type AgentReceipt = {
   version: 1; messageId: string; factId: string; address: AgentAddress; observedAt: string;
 } & (
-  | { kind: "received"; settingsRevision: string | null; wakeEligible: boolean }
+  | { kind: "received"; settingsRevision: string | null; wakeEligible: boolean; nativeDeliveryId?: string }
   | { kind: "attempt"; attemptId: string; messageIds: string[]; settingsRevision: string; outcome: "unconfirmed" }
   | { kind: "in_context"; entryId: string; sessionId: string; durability: "memory" | "persisted" }
   | { kind: "acknowledged" }

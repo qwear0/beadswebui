@@ -54,8 +54,8 @@ export function AgentsView() {
         <p className="text-xs font-medium">{query.error || query.data.availability === "unavailable" ? "Last observed fleet · runtime unavailable" : "Observed fleet in selected scope"}</p>
         <AgentFleetSummary agents={agents} />
         <p className="text-xs text-muted-foreground">Live = fresh observation, not proof of progress. Stale is not death or completion. Work state and instance conflict are separate facts.</p>
-        <p className="break-all text-xs">Messaging policy · auto-wake: {query.data.policy.autoWake === null ? "unknown" : query.data.policy.autoWake ? "enabled" : "disabled"} · revision: {query.data.policy.revision ?? "unknown"} · browser controls: read-only</p>
-        {query.data.policy.error && <p className="text-xs text-destructive">Policy unavailable: {query.data.policy.error}</p>}
+        <p className="break-all text-xs">Messaging policy · auto-wake: {query.data.policy.autoWake === null ? "unknown" : query.data.policy.autoWake ? query.data.policy.revision === null ? "default-on (uninitialized)" : "enabled" : "disabled"} · revision: {query.data.policy.revision ?? (query.data.policy.autoWake === true ? "uninitialized; runtime must persist before auto-wake" : "unknown")} · browser controls: read-only</p>
+        {query.data.policy.error && <p className="text-xs text-destructive">Policy diagnostic: {query.data.policy.error}</p>}
       </div>}
       <div className="mb-4 space-y-2"><p className="text-xs font-medium">Beads pipeline · current project {projectId} · explicit context filters</p><PipelineSummary beads={scopedBeads} loading={loading} error={error} /></div>
       {filters.agentId && <div className="mb-4 flex flex-wrap gap-2"><button className={agentControlClass} onClick={() => setFilters({}, "focus")}>Focus linked work</button><button className={agentControlClass} onClick={() => setFilters({}, "activity")}>Beads activity for linked work</button></div>}

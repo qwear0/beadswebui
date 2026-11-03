@@ -48,7 +48,7 @@ const envelopeSchema = z.object({
 type Envelope = z.infer<typeof envelopeSchema>;
 const receiptBase = { version: z.literal(1), messageId, factId: id, address, observedAt: timestamp };
 const receiptSchema = z.discriminatedUnion("kind", [
-  z.object({ ...receiptBase, kind: z.literal("received"), settingsRevision: z.string().max(256).nullable(), wakeEligible: z.boolean() }),
+  z.object({ ...receiptBase, kind: z.literal("received"), settingsRevision: z.string().max(256).nullable(), wakeEligible: z.boolean(), nativeDeliveryId: id.optional() }),
   z.object({ ...receiptBase, kind: z.literal("attempt"), attemptId: id, messageIds: z.array(messageId).max(8), settingsRevision: z.string().max(256), outcome: z.literal("unconfirmed") }),
   z.object({ ...receiptBase, kind: z.literal("in_context"), entryId: id, sessionId: id, durability: z.enum(["memory", "persisted"]) }),
   z.object({ ...receiptBase, kind: z.literal("acknowledged") }),
@@ -167,9 +167,10 @@ export function readPolicy(): AgentPolicy {
     const parsed = z.object({ version: z.literal(1), revision: z.uuid(), agentMessaging: z.object({ autoWake: z.boolean() }) }).parse(readJson(configRoot(), ["pi-quality-runtime", "agent-workspace.json"]));
     return { autoWake: parsed.agentMessaging.autoWake, revision: parsed.revision, error: null };
   } catch (error) {
-    // Missing settings are default-on in pi_qr, but the read-only web consumer
-    // cannot invent/persist the runtime's effective revision before it exists.
-    return { autoWake: null, revision: null, error: missing(error) ? "Runtime messaging settings have not been initialized" : "Runtime messaging settings are unreadable or invalid" };
+    // Only absence means default-on. The runtime must persist its unique revision
+    // before auto-wake; this read-only consumer cannot initialize that revision.
+    if (missing(error)) return { autoWake: true, revision: null, error: "Runtime messaging settings are uninitialized; runtime must persist a revision before auto-wake" };
+    return { autoWake: null, revision: null, error: "Runtime messaging settings are unreadable or invalid" };
   }
 }
 export interface PresenceProjection { availability: AgentAvailability; agents: AgentSnapshot[]; errors: AgentTelemetryError[] }

@@ -119,7 +119,7 @@ function ProjectIdentity({ projectId }: { projectId: string }) {
 function ReceiptFact({ receipt }: { receipt: AgentReceipt }) {
   let text: string;
   switch (receipt.kind) {
-    case "received": text = `Received by exact instance · wake eligible: ${receipt.wakeEligible ? "yes" : "no"} · settings revision ${receipt.settingsRevision ?? "unknown"}`; break;
+    case "received": text = `Received by exact instance · wake eligible: ${receipt.wakeEligible ? "yes" : "no"} · settings revision ${receipt.settingsRevision ?? "unknown"}${receipt.nativeDeliveryId ? ` · native Delivery observed: ${receipt.nativeDeliveryId} (correlation only; not ACK)` : ""}`; break;
     case "in_context": text = `Context entry observed · ${receipt.durability === "persisted" ? "persisted durability evidenced" : "in memory only; persistence not established"} · entry ${receipt.entryId} · session ${receipt.sessionId}`; break;
     case "native_ack": text = `Native Delivery ACK · ${receipt.deliveryId} (not a generic receipt)`; break;
     case "acknowledged": text = "Explicit message-ID acknowledgement"; break;
