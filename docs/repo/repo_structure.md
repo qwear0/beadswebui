@@ -33,6 +33,7 @@
 - code: `next.config.ts` and `Dockerfile` — build configuration and opt-in standalone container output.
 - contract: `lib/schema.ts` — Beads and mutation schemas; `lib/api-client.ts` — browser API shapes.
 - contract: `lib/store.ts` — store interface/selection; `lib/bd.ts` — local CLI adapter; `lib/demo-store.ts` — in-memory demo store.
+- contract: `lib/agent-protocol.ts` — sanitized browser agent/mail shapes; `lib/agent-projection.ts` reads the external local protocol without importing the Pi runtime.
 
 ## 4. Responsibility boundaries
 
@@ -41,6 +42,8 @@
 - zone: `lib/` mixes browser-safe domain helpers and server-only integrations; inspect imports rather than treating the whole directory as shared browser code.
 - zone: `lib/config.ts` owns application/project configuration; `lib/bd.ts` invokes Beads in the selected repository.
 - zone: `lib/beads-watch.ts` and `lib/sse-registry.ts` own server stream notification/lifecycle; `hooks/use-beads-stream.ts` owns browser invalidation.
+- zone: `lib/agent-watch.ts`, `lib/agent-api.ts`, `app/api/agents/`, and project agent routes own one shared read-only agent projection/stream. `hooks/use-agents.ts` keeps presence/history queries separate from Beads; agent components and `hooks/use-agent-filters.ts` own the browser surface.
+- owner-rule: The existing external `pi_quality_runtime` extension owns identity, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
 - zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns AI-assist integration.
 - zone: `lib/update-service.ts`, `lib/self-update.ts`, and `lib/update-types.ts` own update coordination and contracts.
 - zone: `lib/themes.ts`, `components/theme-provider.tsx`, and `app/globals.css` own theme registry, selection, and palettes.
@@ -55,6 +58,7 @@
 - doc: `docs/repo/configuration.md` - project registration, settings, actor defaults, environment, and persistence locations
 - doc: `docs/repo/api-and-beads.md` - HTTP route families, data/error contracts, attachments, and CLI serialization
 - doc: `docs/repo/ui-state.md` - URL navigation, filters, detail trail, preferences, query caches, and themes
+- doc: `docs/repo/agent-workspace.md` - live-agent identity, local runtime protocol, read-only conversations, filters, and activation boundaries
 - doc: `docs/repo/operations.md` - local/container launch modes, shutdown, self-update, and optional external integrations
 - doc: `docs/repo/verification.md` - retired test infrastructure, supported checks, and limitations
 
