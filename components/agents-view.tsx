@@ -43,6 +43,7 @@ export function AgentsView() {
       {query.data && <div className="mb-4 space-y-3 rounded-lg border border-border bg-[var(--surface-2)] p-3">
         <p className="text-xs font-medium">{query.error || query.data.availability === "unavailable" ? "Last observed fleet · runtime unavailable" : "Observed fleet in selected scope"}</p>
         <AgentFleetSummary agents={agents} />
+        <p className="text-xs text-muted-foreground">{query.error || query.data.availability === "unavailable" ? "Last observed global mail auto-wake" : "Global mail auto-wake"}: {query.data.policy.autoWake === false ? "off" : query.data.policy.autoWake === true && query.data.policy.revision ? "on · per-instance pauses still apply" : "unknown"}</p>
         {query.data.policy.error && <p className="text-xs text-destructive">Policy diagnostic: {query.data.policy.error}</p>}
       </div>}
       {filters.agentId && <div className="mb-4 flex flex-wrap gap-2"><button className={agentControlClass} onClick={() => setFilters({}, "focus")}>Focus linked work</button><button className={agentControlClass} onClick={() => setFilters({}, "activity")}>Beads activity for linked work</button></div>}
@@ -61,12 +62,13 @@ function AgentCard({ agent, now, allAgents, unavailable }: { agent: AgentSnapsho
   const { filters, setFilters } = useAgentFilters();
   const selected = !!filters.agentId && matchesAgent(agent, filters);
   const live = !unavailable && agent.liveness === "online" && !agent.conflict;
+  const mailWakePaused = agent.role === "coordinator" && agent.capabilities.coordinatorMail && agent.suspended;
   const bead = agent.bead?.projectId === projectId ? beads.find(item => item.id === agent.bead?.beadId) : undefined;
   const relatedEpics = bead ? beads.filter(item => item.issue_type === "epic" && epicInsideIds(beads, item.id)?.has(bead.id)) : [];
   const parent = agent.parent?.instanceId ? allAgents.find(item => item.agentId === agent.parent!.agentId && item.instanceId === agent.parent!.instanceId) : undefined;
   return <article className={`min-w-0 rounded-lg border bg-[var(--surface)] p-4 ${selected ? "border-[var(--brand)] ring-1 ring-[var(--brand)]" : "border-border"}`} aria-label={`Agent ${agent.label}, instance ${agent.instanceId}`}>
     <div className="flex flex-wrap items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-sm font-semibold">{agent.label}</h3><button aria-pressed={selected} className={agentControlClass} onClick={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })}>{selected ? "Clear instance filter" : "Filter instance"}</button></div>
-    <div className="my-2 flex flex-wrap gap-2 text-xs"><span className="rounded border border-border px-2 py-1">Presence: {unavailable ? `last observed ${agent.liveness} · current freshness unknown` : agent.liveness === "online" ? "live (fresh)" : agent.liveness}</span><span className="rounded border border-border px-2 py-1">Work: {agent.workState}</span>{agent.conflict && <strong className="rounded border border-destructive px-2 py-1 text-destructive">Concurrent instance conflict · no unique live target</strong>}{agent.suspended && <span className="rounded border border-border px-2 py-1">Suspended</span>}</div>
+    <div className="my-2 flex flex-wrap gap-2 text-xs"><span className="rounded border border-border px-2 py-1">Presence: {unavailable ? `last observed ${agent.liveness} · current freshness unknown` : agent.liveness === "online" ? "live (fresh)" : agent.liveness}</span><span className="rounded border border-border px-2 py-1">Work: {agent.workState}</span>{agent.conflict && <strong className="rounded border border-destructive px-2 py-1 text-destructive">Concurrent instance conflict · no unique live target</strong>}{mailWakePaused && <span className="rounded border border-border px-2 py-1" title="Mail-triggered automatic starts are paused. Agent execution is not blocked. Resume in Pi with a new user run or /agent-workspace resume."><span aria-hidden="true" className="line-through">auto-wake</span><span className="sr-only">Mail auto-wake paused. Agent execution is not blocked.</span></span>}</div>
     <p className="mb-2 break-words text-sm">{agent.summary ?? "Work summary unknown · no explicit context published"}</p>
     <dl className="space-y-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
       <Field label="Role" value={agent.role} />
