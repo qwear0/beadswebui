@@ -92,7 +92,7 @@ export function BeadAgentLinks({ beadId, onNavigate }: { beadId: string; onNavig
     {!query.isLoading && !query.error && query.data?.availability === "available" && agents.length === 0 && <p className="text-xs text-muted-foreground">No explicit runtime links to this bead were found in readable snapshots. Assignees and historical actors are not live-session evidence.</p>}
     <div className="flex flex-wrap gap-2">{agents.map(agent => <button key={agentKey(agent)} className={agentControlClass} onClick={() => {
       onNavigate();
-      setFilters({ agentId: agent.agentId, instanceId: agent.instanceId, issueId: beadId, projectId, epicId: null, threadId: null }, "agents");
+      setFilters({ agentId: agent.agentId, instanceId: agent.instanceId, issueId: beadId, epicId: null, threadId: null }, "agents");
     }}>{agent.label} · {agent.liveness} · {agent.workState}{agent.conflict ? " · conflict" : ""}</button>)}</div>
   </section>;
 }

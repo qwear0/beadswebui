@@ -4,67 +4,52 @@ import * as React from "react";
 import Link from "next/link";
 import { useApp } from "@/components/app-context";
 import { useAgents } from "@/hooks/use-agents";
-import { useProjects } from "@/hooks/use-projects";
-import { ALL_AGENT_PROJECTS, useAgentFilters } from "@/hooks/use-agent-filters";
+import { useAgentFilters } from "@/hooks/use-agent-filters";
+import { Icon } from "@/components/icons";
 import { AgentConversation } from "@/components/agent-conversation";
-import { AgentCrossFilters, AgentFleetSummary, AgentStatusNotice, PipelineSummary, agentControlClass } from "@/components/agent-summary";
-import { agentKey, elapsedTime, epicInsideIds, filterAgentBeads, groupAgents, matchesAgent } from "@/lib/agent-ui";
+import { AgentCrossFilters, AgentFleetSummary, AgentStatusNotice, agentControlClass } from "@/components/agent-summary";
+import { agentKey, elapsedTime, epicInsideIds, groupAgents, matchesAgent } from "@/lib/agent-ui";
 import type { AgentSnapshot } from "@/lib/agent-protocol";
 
 export function AgentsView() {
-  const { projectId, meta, beads, loading, error } = useApp();
+  const { projectId, beads } = useApp();
   const { filters, setFilters } = useAgentFilters();
-  const projects = useProjects();
-  const selectedProject = projectId === "demo" || meta?.kind === "demo" ? "demo" : filters.projectId ?? projectId;
-  const scope = selectedProject === ALL_AGENT_PROJECTS ? undefined : selectedProject;
-  const query = useAgents(scope);
+  const query = useAgents(projectId);
   const agents = query.data?.agents ?? [];
   const insideIds = React.useMemo(() => epicInsideIds(beads, filters.epicId), [beads, filters.epicId]);
   const visible = agents.filter(agent => matchesAgent(agent, filters) &&
     (!insideIds || agent.bead?.projectId === projectId && insideIds.has(agent.bead.beadId)) &&
     (!filters.issueId || agent.bead?.projectId === projectId && agent.bead.beadId === filters.issueId));
   const groups = groupAgents(visible, agents);
-  const scopedBeads = filterAgentBeads(beads, agents, projectId, filters);
   const [now, setNow] = React.useState(0);
   React.useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   const time = now || Date.parse(query.data?.observedAt ?? "");
-  const registered = projects.data?.projects.filter(project => project.id !== "demo" && project.path !== null) ?? [];
 
   return <div className="flex h-full min-h-0 flex-col">
-    <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-4 md:px-6">
-      <div className="min-w-0 flex-1"><h1 className="text-base font-semibold">Agents</h1><p className="mt-1 text-xs text-muted-foreground">Runtime presence and read-only conversations · not inferred from Beads activity</p></div>
-      <label className="flex min-w-0 flex-col gap-1 text-xs">Registered project scope
-        <select className={agentControlClass} disabled={selectedProject === "demo"} value={selectedProject} onChange={event => setFilters({ projectId: event.target.value, agentId: null, instanceId: null, epicId: null, issueId: null, threadId: null })}>
-          <option value={ALL_AGENT_PROJECTS}>All registered projects</option>
-          {selectedProject === "demo" && <option value="demo">Demo · no runtime</option>}
-          {selectedProject !== ALL_AGENT_PROJECTS && selectedProject !== "demo" && !registered.some(project => project.id === selectedProject) && <option value={selectedProject}>{selectedProject}</option>}
-          {registered.map(project => <option key={project.id} value={project.id}>{project.name} · {project.id}</option>)}
-        </select>
-      </label>
-      <button className={agentControlClass} disabled={query.isFetching} onClick={() => void query.refetch()}>{query.isFetching ? "Refreshing…" : "Refresh presence"}</button>
+    <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-6 py-4">
+      <Icon name="user" size={18} className="text-[var(--text-2)]" />
+      <h1 className="text-[15px] font-[650]">Agents</h1>
+      <span className="text-[12px] text-[var(--text-3)]">· runtime presence and read-only conversations · not inferred from Beads activity</span>
+      <button className={`${agentControlClass} ml-auto`} disabled={query.isFetching} onClick={() => void query.refetch()}>{query.isFetching ? "Refreshing…" : "Refresh presence"}</button>
     </header>
     <div className="max-h-[35vh] shrink-0 overflow-y-auto"><AgentCrossFilters agents={agents} unavailable={!!query.error || query.data?.availability === "unavailable"} /></div>
     <div className="bd-scroll min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
-      {projects.error && <p className="mb-3 text-xs text-destructive">Project registry unavailable: {projects.error.message}</p>}
       <AgentStatusNotice data={query.data} isLoading={query.isLoading} error={query.error} />
       {query.data && <div className="mb-4 space-y-3 rounded-lg border border-border bg-[var(--surface-2)] p-3">
         <p className="text-xs font-medium">{query.error || query.data.availability === "unavailable" ? "Last observed fleet · runtime unavailable" : "Observed fleet in selected scope"}</p>
         <AgentFleetSummary agents={agents} />
-        <p className="text-xs text-muted-foreground">Live = fresh observation, not proof of progress. Stale is not death or completion. Work state and instance conflict are separate facts.</p>
-        <p className="break-all text-xs">Messaging policy · auto-wake: {query.data.policy.autoWake === null ? "unknown" : query.data.policy.autoWake ? query.data.policy.revision === null ? "default-on (uninitialized)" : "enabled" : "disabled"} · revision: {query.data.policy.revision ?? (query.data.policy.autoWake === true ? "uninitialized; runtime must persist before auto-wake" : "unknown")} · browser controls: read-only</p>
         {query.data.policy.error && <p className="text-xs text-destructive">Policy diagnostic: {query.data.policy.error}</p>}
       </div>}
-      <div className="mb-4 space-y-2"><p className="text-xs font-medium">Beads pipeline · current project {projectId} · explicit context filters</p><PipelineSummary beads={scopedBeads} loading={loading} error={error} /></div>
       {filters.agentId && <div className="mb-4 flex flex-wrap gap-2"><button className={agentControlClass} onClick={() => setFilters({}, "focus")}>Focus linked work</button><button className={agentControlClass} onClick={() => setFilters({}, "activity")}>Beads activity for linked work</button></div>}
       {!query.isLoading && !query.error && query.data?.availability === "available" && visible.length === 0 && <p className="mb-4 rounded-lg border border-border p-4 text-sm text-muted-foreground">{agents.length === 0 ? "No runtime agents observed in this registered scope." : "No runtime instances match the current explicit filters."} Historical issue actors are not used to create agents.</p>}
       <div className="space-y-5">{groups.map(group => <section key={group.key} aria-label={group.label}>
         <h2 className="mb-2 break-words text-sm font-semibold">{group.label} <span className="font-normal text-muted-foreground">· {group.agents.length}</span></h2>
         <div className="grid min-w-0 gap-3 xl:grid-cols-2">{group.agents.map(agent => <AgentCard key={agentKey(agent)} agent={agent} now={time} allAgents={agents} unavailable={!!query.error || query.data?.availability === "unavailable"} />)}</div>
       </section>)}</div>
-      <div className="mt-6"><AgentConversation projectId={scope} contextProjectId={projectId} insideIds={insideIds} issueId={filters.issueId} agents={agents} /></div>
+      <div className="mt-6"><AgentConversation projectId={projectId} contextProjectId={projectId} insideIds={insideIds} issueId={filters.issueId} agents={agents} /></div>
     </div>
   </div>;
 }

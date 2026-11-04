@@ -47,8 +47,8 @@ Example bookmark using a registered project ID:
 
 ### Agent Workspace navigation and live state
 
-- contract: Agent cross-filters use `agent`, `instance`, `epic`, `issue`, `thread` and `agentProject` URL parameters. Runtime identity filters are not assignees/historical actors; project-qualified explicit bead linkage connects the fleet to Activity/Focus and issue detail. Epic membership uses descendants, not dependency-graph neighbors.
-- contract: Agents defaults to the current project; `agentProject=all` selects all registered projects, while Demo stays isolated. Epic/issue filters and pipeline counts still refer to the shell's current project, not an aggregate Beads query.
+- contract: Agent cross-filters use `agent`, `instance`, `epic`, `issue` and `thread` URL parameters. Runtime identity filters are not assignees/historical actors; project-qualified explicit bead linkage connects the fleet to Activity/Focus and issue detail. Epic membership uses descendants, not dependency-graph neighbors.
+- contract: Agents presence and conversations follow the globally selected project in the shell, with no separate project selector or URL scope override. Demo stays isolated. Epic/issue filters use that same project; Beads pipeline counts appear in Focus/Activity, not Agents.
 - contract: Fleet liveness, work state, conflict and parent-instance uncertainty remain separate. Pipeline totals include every observed Beads status, including unknown values. Agent telemetry/messages do not become issue Activity events or Needs You requests.
 - contract: Conversations are read-only and paged. Filters apply to loaded thread context, not an exhaustive history search; message facts and linked replies are observations, not a mandatory linear delivery progression. See [Agent Workspace](agent-workspace.md).
 - contract: Query keys begin with `agents` and include project/global scope, then snapshot, conversations or messages/thread. They do not share issue/activity keys. Hooks share a reference-counted EventSource per query client/scope; presence/policy revisions invalidate snapshots, history revisions invalidate conversations/messages, never Beads.

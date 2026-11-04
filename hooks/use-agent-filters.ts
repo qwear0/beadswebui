@@ -3,21 +3,17 @@
 import * as React from "react";
 import { useUrlState } from "@/hooks/use-url-state";
 
-// UI/URL-only: ':' is outside the registered project-ID alphabet.
-export const ALL_AGENT_PROJECTS = ":all";
-
 export interface AgentFilters {
   agentId: string | null;
   instanceId: string | null;
   epicId: string | null;
   issueId: string | null;
   threadId: string | null;
-  projectId: string | null;
 }
 
 const keys = {
   agentId: "agent", instanceId: "instance", epicId: "epic",
-  issueId: "issue", threadId: "thread", projectId: "agentProject",
+  issueId: "issue", threadId: "thread",
 } as const;
 
 /** Agent filters are explicit runtime context, never Beads assignees or actors. */
@@ -29,7 +25,6 @@ export function useAgentFilters() {
     epicId: searchParams.get("epic") || null,
     issueId: searchParams.get("issue") || null,
     threadId: searchParams.get("thread") || null,
-    projectId: searchParams.get("agentProject") || null,
   };
   const setFilters = React.useCallback((patch: Partial<AgentFilters>, view?: "agents" | "activity" | "focus") => {
     updateUrl(params => {
