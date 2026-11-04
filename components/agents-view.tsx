@@ -7,6 +7,7 @@ import { useAgents } from "@/hooks/use-agents";
 import { useAgentFilters } from "@/hooks/use-agent-filters";
 import { Icon } from "@/components/icons";
 import { AgentConversation } from "@/components/agent-conversation";
+import { AgentTopology } from "@/components/agent-topology";
 import { AgentCrossFilters, AgentFleetSummary, AgentStatusNotice, agentControlClass } from "@/components/agent-summary";
 import { agentKey, elapsedTime, epicInsideIds, groupAgents, matchesAgent } from "@/lib/agent-ui";
 import type { AgentSnapshot } from "@/lib/agent-protocol";
@@ -38,6 +39,7 @@ export function AgentsView() {
     <div className="max-h-[35vh] shrink-0 overflow-y-auto"><AgentCrossFilters agents={agents} unavailable={!!query.error || query.data?.availability === "unavailable"} /></div>
     <div className="bd-scroll min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
       <AgentStatusNotice data={query.data} isLoading={query.isLoading} error={query.error} />
+      {query.data && <AgentTopology key={projectId ?? "global"} agents={agents} visible={visible} projectId={projectId} now={time} unavailable={!!query.error || query.data.availability === "unavailable"} />}
       {query.data && <div className="mb-4 space-y-3 rounded-lg border border-border bg-[var(--surface-2)] p-3">
         <p className="text-xs font-medium">{query.error || query.data.availability === "unavailable" ? "Last observed fleet · runtime unavailable" : "Observed fleet in selected scope"}</p>
         <AgentFleetSummary agents={agents} />
