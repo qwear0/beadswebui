@@ -52,7 +52,7 @@ export function AgentTopology({ agents, visible, projectId, now, unavailable }: 
     return latest;
   }, [history.data]);
   const historyUnavailable = !!history.error || history.data?.pages.some(page => page.availability !== "available" || page.errors.length > 0);
-  const ready = !!history.data && !historyUnavailable && !unavailable;
+  const ready = history.streamContinuity !== null && !!history.data && !historyUnavailable && !unavailable;
   const visibleKeys = new Set(visible.map(agentKey));
 
   return <section className={styles.topology} aria-label="Active agent topology">
@@ -61,7 +61,7 @@ export function AgentTopology({ agents, visible, projectId, now, unavailable }: 
       <span>{groups.length} {groups.length === 1 ? "group" : "groups"} · {visible.filter(agent => agent.liveness === "online").length} {unavailable ? "last observed online" : "online in filter"}</span>
     </div>
     {!groups.length && <p className={styles.empty}>{unavailable ? "No last-observed online instances available." : "No online agents match the selected scope and filters."} Stale and ended instances remain in the fleet below.</p>}
-    {groups.map(group => <TopologyGroup key={group.key} group={group} events={events} ready={ready} now={now} unavailable={unavailable} visibleKeys={visibleKeys} />)}
+    {groups.map(group => <TopologyGroup key={group.key} group={group} events={events} ready={ready} continuity={history.streamContinuity} now={now} unavailable={unavailable} visibleKeys={visibleKeys} />)}
     <div className={styles.legend}>
       <span><i /> Confirmed ownership</span><span><i className={styles.uncertainKey} /> Last observed / conflict</span><span><i className={styles.signalKey} /> New observed message</span>
       <span>{historyUnavailable ? "Message activity unavailable" : history.isLoading ? "Loading message activity…" : "Latest loaded native messages · not delivery / ACK confirmation"}</span>
@@ -70,8 +70,8 @@ export function AgentTopology({ agents, visible, projectId, now, unavailable }: 
   </section>;
 }
 
-function TopologyGroup({ group, events, ready, now, unavailable, visibleKeys }: {
-  group: Group; events: Map<string, AgentConversation>; ready: boolean; now: number; unavailable: boolean; visibleKeys: Set<string>;
+function TopologyGroup({ group, events, ready, continuity, now, unavailable, visibleKeys }: {
+  group: Group; events: Map<string, AgentConversation>; ready: boolean; continuity: number | null; now: number; unavailable: boolean; visibleKeys: Set<string>;
 }) {
   const canvas = React.useRef<HTMLDivElement>(null);
   const [traces, setTraces] = React.useState<Trace[]>([]);
@@ -115,6 +115,7 @@ function TopologyGroup({ group, events, ready, now, unavailable, visibleKeys }: 
     window.addEventListener("offline", reset);
     window.addEventListener("online", reset);
     motion.addEventListener("change", reset);
+    // Cleanup also resets batched disconnect/recovery transitions to a new baseline.
     return () => {
       reset();
       document.removeEventListener("visibilitychange", reset);
@@ -122,7 +123,7 @@ function TopologyGroup({ group, events, ready, now, unavailable, visibleKeys }: 
       window.removeEventListener("online", reset);
       motion.removeEventListener("change", reset);
     };
-  }, []);
+  }, [continuity]);
 
   React.useEffect(() => {
     const paths = canvas.current?.querySelectorAll<SVGPathElement>("[data-signal]");
@@ -157,14 +158,14 @@ function TopologyGroup({ group, events, ready, now, unavailable, visibleKeys }: 
       ], { duration: 1800, easing: "linear" });
     });
     previous.current = { since, latest: next };
-  }, [events, ready, uncertain, ownerKey, traces, group.workers]);
+  }, [events, ready, continuity, uncertain, ownerKey, traces, group.workers]);
 
   return <article className={styles.group} aria-label={`Agent group: ${group.label}`}>
     <header className={styles.groupHeading}><strong>{group.label}</strong><span>{group.workers.length} {group.owner ? (group.workers.length === 1 ? "worker" : "workers") : (group.workers.length === 1 ? "unattached agent" : "unattached agents")}{uncertain && group.owner ? " · last observed / uncertain" : ""}</span></header>
     <div className={styles.scroll}>
       <div className={styles.canvas} ref={canvas}>
         <svg className={styles.connections} aria-hidden="true">
-          {traces.map(trace => <g key={trace.key}>
+          {ownerKey && traces.map(trace => <g key={trace.key}>
             <path d={trace.path} className={styles.trace} strokeDasharray={uncertain || group.workers.find(agent => agentKey(agent) === trace.key)?.conflict ? "4 4" : undefined} />
             <path d={trace.path} className={styles.signal} data-signal={trace.key} pathLength={100} strokeDasharray="8 92" />
           </g>)}
