@@ -17,6 +17,7 @@
 - reads-after: Choose the relevant narrow guide below: configuration, API/CLI contracts, browser state, or operations. Do not read every implementation file to answer a bounded question.
 - reads-after: `docs/repo/verification.md` — available checks, retired tests, and verification limits.
 - reads-after: `.agents/skills/beadswebui-doc-maintainer/SKILL.md` — documentation impact and audit workflow.
+- reads-after: Global `~/.agents/skills/beads/SKILL.md` — Beads task workflow; this repository does not install a project-local copy.
 - reads-after: Installed Next.js guides under `node_modules/next/dist/docs/` before framework code edits.
 
 ## 3. Verified anchors
