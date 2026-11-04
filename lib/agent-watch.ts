@@ -79,7 +79,7 @@ function create(root: string): Entry {
     add(path.dirname(root), [], "root");
     add(root, [], "root"); add(root, ["presence"], "presence");
     for (const agent of observer.presence.agents) add(root, ["presence", agent.agentId], "presence");
-    add(root, ["messages"], "history"); add(root, ["receipts"], "history");
+    add(root, ["messages"], "history"); add(root, ["receipts"], "history"); add(root, ["processing"], "history");
     const now = new Date().toISOString();
     add(root, ["messages", now.slice(0, 10)], "history");
     add(root, ["messages", now.slice(0, 10), now.slice(11, 13)], "history");

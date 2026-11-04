@@ -60,6 +60,8 @@ export type AgentReceipt = {
   | { kind: "received"; settingsRevision: string | null; wakeEligible: boolean; nativeDeliveryId?: string }
   | { kind: "attempt"; attemptId: string; messageIds: string[]; settingsRevision: string; outcome: "unconfirmed" }
   | { kind: "in_context"; entryId: string; sessionId: string; durability: "memory" | "persisted" }
+  | { kind: "tool_read" }
+  | { kind: "answered"; replyMessageId: string }
   | { kind: "acknowledged" }
   | { kind: "native_ack"; deliveryId: string }
   | { kind: "outcome"; outcome: "expired" | "rejected" | "unconfirmed"; code: string }
@@ -80,7 +82,7 @@ export interface AgentMessage {
   native: { bindingId: string; dispatchId: string; taskId: string; messageId: string | null; questionId: string | null; deliveryId: string | null; kind: string } | null;
   /** Independent observations; neither order nor absence implies a delivery stage. */
   receipts: AgentReceipt[];
-  /** Linked replies observed in this page; more may occur in other pages. */
+  /** Validated answer facts plus linked replies in this page; absence is not non-response. */
   answeredBy: string[];
 }
 export interface AgentConversationsResponse {

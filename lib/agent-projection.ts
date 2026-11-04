@@ -51,6 +51,8 @@ const receiptSchema = z.discriminatedUnion("kind", [
   z.object({ ...receiptBase, kind: z.literal("received"), settingsRevision: z.string().max(256).nullable(), wakeEligible: z.boolean(), nativeDeliveryId: id.optional() }),
   z.object({ ...receiptBase, kind: z.literal("attempt"), attemptId: id, messageIds: z.array(messageId).max(8), settingsRevision: z.string().max(256), outcome: z.literal("unconfirmed") }),
   z.object({ ...receiptBase, kind: z.literal("in_context"), entryId: id, sessionId: id, durability: z.enum(["memory", "persisted"]) }),
+  z.object({ ...receiptBase, kind: z.literal("tool_read"), factId: z.literal("tool_read") }),
+  z.object({ ...receiptBase, kind: z.literal("answered"), replyMessageId: messageId }),
   z.object({ ...receiptBase, kind: z.literal("acknowledged") }),
   z.object({ ...receiptBase, kind: z.literal("native_ack"), deliveryId: id }),
   z.object({ ...receiptBase, kind: z.literal("outcome"), outcome: z.enum(["expired", "rejected", "unconfirmed"]), code: id }),
@@ -272,17 +274,31 @@ function allowed(envelope: Envelope, registry: Registry, projectId?: string) {
   // messages actually attributed to it, even when a pointer was malformed.
   return registry.ids.includes(envelope.senderProjectId) && registry.ids.includes(envelope.recipientProjectId) && (!projectId || envelope.senderProjectId === projectId || envelope.recipientProjectId === projectId);
 }
+function isReplyTo(reply: Envelope, parent: Envelope) {
+  return reply.kind === "reply" && reply.inReplyTo === parent.messageId && reply.threadId === parent.threadId &&
+    reply.transport === parent.transport && reply.sender.agentId === parent.recipient.agentId &&
+    reply.sender.instanceId === parent.recipient.instanceId && reply.recipient.agentId === parent.sender.agentId &&
+    reply.recipient.instanceId === parent.sender.instanceId && reply.senderProjectId === parent.recipientProjectId &&
+    reply.recipientProjectId === parent.senderProjectId;
+}
 function readReceipts(root: string, envelope: Envelope, errors: AgentTelemetryError[], budget: { remaining: number }): AgentReceipt[] {
   const facts: AgentReceipt[] = [];
-  try {
-    for (const entry of directory(root, ["receipts", envelope.messageId], true)) {
+  for (const source of ["receipts", "processing"]) try {
+    for (const entry of directory(root, [source, envelope.messageId], true)) {
       let fact: string | null = null;
       try {
         fact = committed(entry, NATIVE);
         if (!fact) continue;
         if (--budget.remaining < 0) throw new AgentReadError("receipt_read_limit", "Receipt read budget exceeded; some independent facts are not loaded");
-        const parsed = receiptSchema.parse(readJson(root, ["receipts", envelope.messageId, entry.name]));
-        if (parsed.messageId !== envelope.messageId || parsed.factId !== fact || ![envelope.sender, envelope.recipient].some((a) => a.agentId === parsed.address.agentId && a.instanceId === parsed.address.instanceId) || (parsed.kind === "attempt" && !parsed.messageIds.includes(envelope.messageId))) throw new AgentReadError("receipt_mismatch", "Receipt identity does not match the message or exact participants");
+        const parsed = receiptSchema.parse(readJson(root, [source, envelope.messageId, entry.name]));
+        const processing = parsed.kind === "tool_read" || parsed.kind === "answered";
+        if (parsed.messageId !== envelope.messageId || parsed.factId !== fact || ![envelope.sender, envelope.recipient].some((a) => a.agentId === parsed.address.agentId && a.instanceId === parsed.address.instanceId) || (parsed.kind === "attempt" && !parsed.messageIds.includes(envelope.messageId)) || processing !== (source === "processing")) throw new AgentReadError("receipt_mismatch", "Receipt identity does not match the message, participants or fact directory");
+        if (processing && (envelope.transport !== "coordinator_mail" || parsed.address.agentId !== envelope.recipient.agentId || parsed.address.instanceId !== envelope.recipient.instanceId)) throw new AgentReadError("processing_mismatch", "Processing fact must belong to the exact coordinator recipient");
+        if (parsed.kind === "answered") {
+          if (--budget.remaining < 0) throw new AgentReadError("receipt_read_limit", "Answer correlation read budget exceeded");
+          const reply = canonicalEnvelope(root, parsed.replyMessageId);
+          if (!reply || !isReplyTo(reply, envelope) || parsed.factId !== `answered_${createHash("sha256").update(parsed.replyMessageId).digest("hex").slice(0, 32)}`) throw new AgentReadError("answer_mismatch", "Answer fact lacks a matching committed linked reply");
+        }
         facts.push(parsed);
       } catch (error) {
         errors.push(telemetry("history", error, envelope.messageId));
@@ -388,9 +404,12 @@ export function readHistory(root: string, registry: Registry, projectId: string 
   const messages: AgentMessage[] = threadId ? envelopes.map((raw) => {
     const { version: _version, operationKey: _operationKey, requestHash: _requestHash, ...envelope } = raw;
     void _version; void _operationKey; void _requestHash;
-    watchPaths.push(["receipts", envelope.messageId]);
+    watchPaths.push(["receipts", envelope.messageId], ["processing", envelope.messageId]);
     const receipts = readReceipts(root, raw, errors, receiptsBudget);
-    return { ...envelope, receipts, answeredBy: envelopes.filter((reply) => reply.kind === "reply" && reply.inReplyTo === envelope.messageId && reply.threadId === envelope.threadId && reply.sender.agentId === envelope.recipient.agentId && reply.sender.instanceId === envelope.recipient.instanceId && reply.recipient.agentId === envelope.sender.agentId && reply.recipient.instanceId === envelope.sender.instanceId && reply.senderProjectId === envelope.recipientProjectId && reply.recipientProjectId === envelope.senderProjectId).map((reply) => reply.messageId) };
+    return { ...envelope, receipts, answeredBy: [...new Set([
+      ...receipts.filter((fact): fact is Extract<AgentReceipt, { kind: "answered" }> => fact.kind === "answered").map(fact => fact.replyMessageId),
+      ...envelopes.filter(reply => isReplyTo(reply, raw)).map(reply => reply.messageId),
+    ])] };
   }) : [];
   const conversations: AgentConversation[] = envelopes.map((envelope) => ({
     threadId: envelope.threadId, participantProjects: [...new Set([envelope.senderProjectId, envelope.recipientProjectId])],

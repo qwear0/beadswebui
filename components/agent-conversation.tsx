@@ -37,7 +37,7 @@ export function AgentConversation({ projectId, contextProjectId, insideIds, issu
     ...message,
     // A linked reply proves an answer without requiring an acknowledgement.
     answeredBy: [...new Set([...message.answeredBy, ...allMessages.filter(reply =>
-      reply.kind === "reply" && reply.inReplyTo === message.messageId && reply.threadId === message.threadId &&
+      reply.kind === "reply" && reply.inReplyTo === message.messageId && reply.threadId === message.threadId && reply.transport === message.transport &&
       agentKey(reply.sender) === agentKey(message.recipient) && agentKey(reply.recipient) === agentKey(message.sender) &&
       reply.senderProjectId === message.recipientProjectId && reply.recipientProjectId === message.senderProjectId).map(reply => reply.messageId)])],
   }));
@@ -47,6 +47,7 @@ export function AgentConversation({ projectId, contextProjectId, insideIds, issu
       <h2 className="text-sm font-semibold">Conversations</h2>
       <span className="text-xs text-muted-foreground">Read-only · send messages and change wake settings in pi_qr, not this browser.</span>
     </div>
+    <p className="mb-2 text-xs text-muted-foreground">Coordinator mail is asynchronous: acceptance is storage, not an immediate response or resource reservation. Busy recipients process mail when idle; there is no response deadline. Silence is not consent.</p>
     <p className="mb-3 text-xs text-muted-foreground">Agent/epic/issue filters apply to loaded thread records and messages with explicit context. No runtime events are added to Beads issue history.</p>
     {conversations.isLoading && <p role="status" className="p-3 text-xs">Loading conversations…</p>}
     {conversations.error && <p role="alert" className="p-3 text-xs text-destructive">Conversation history unavailable: {conversations.error.message}</p>}
@@ -91,6 +92,10 @@ function Address({ address, agents }: { address: AgentAddress; agents: AgentSnap
 }
 
 function MessageCard({ message, agents }: { message: AgentMessage; agents: AgentSnapshot[] }) {
+  const received = message.receipts.find(fact => fact.kind === "received");
+  const shown = message.receipts.find(fact => fact.kind === "in_context" && fact.durability === "persisted")
+    ?? message.receipts.find(fact => fact.kind === "in_context");
+  const read = message.receipts.find(fact => fact.kind === "tool_read");
   return <article className="min-w-0 rounded-lg border border-border bg-[var(--surface)] p-3 text-xs">
     <h4 className="mb-2 break-all font-mono font-medium">{message.kind} · {message.messageId}</h4>
     <dl className="space-y-1 text-muted-foreground">
@@ -103,10 +108,18 @@ function MessageCard({ message, agents }: { message: AgentMessage; agents: Agent
     </dl>
     <p className="my-3 whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{message.body}</p>
     <div className="border-t border-border pt-2">
-      <p className="mb-2 text-muted-foreground">Independent facts · no missing delivery stage is inferred.</p>
-      <ul className="space-y-1">{message.receipts.map(receipt => <li key={receipt.factId} className="break-words"><ReceiptFact receipt={receipt} /></li>)}</ul>
-      {(["received", "in_context", "acknowledged", "native_ack"] as const).filter(kind => !message.receipts.some(receipt => receipt.kind === kind)).map(kind => <p key={kind} className="text-muted-foreground">{({ received: "Receipt", in_context: "Context entry / durability", acknowledged: "Explicit acknowledgement", native_ack: "Native Delivery ACK" })[kind]}: not observed</p>)}
-      <p className="mt-2 break-all">Answered by linked reply (observed pages): {message.answeredBy.length ? message.answeredBy.join(", ") : "not observed"}</p>
+      <dl aria-label="Mail processing observations" className="space-y-1 [overflow-wrap:anywhere]">
+        <div><dt className="inline font-medium">Received by instance: </dt><dd className="inline">{received?.observedAt ?? "not observed"}</dd></div>
+        {message.transport === "coordinator_mail" && <>
+          <div><dt className="inline font-medium">Shown to model: </dt><dd className="inline">{shown?.kind === "in_context" ? `${shown.observedAt} · ${shown.durability === "persisted" ? "saved session evidence" : "in-memory evidence only"}` : "not observed"}</dd></div>
+          <div><dt className="inline font-medium">Read by mail tool: </dt><dd className="inline">{read?.observedAt ?? "not observed"}</dd></div>
+        </>}
+        <div><dt className="inline font-medium">Answered by linked reply: </dt><dd className="inline">{message.answeredBy.length ? message.answeredBy.join(", ") : "not observed"}</dd></div>
+      </dl>
+      <p className="mt-2 text-muted-foreground">Independent observations, not a delivery ladder. Tool-read means selected by agent_read, not comprehension. Missing evidence is not non-delivery; older runtimes do not record tool reads. Answers need no ACK.</p>
+      <details className="mt-2"><summary className="cursor-pointer">Receipt details · {message.receipts.length} facts (mail ACK and native ACK are separate)</summary>
+        <ul className="mt-2 space-y-1">{message.receipts.map(receipt => <li key={receipt.factId} className="break-words"><ReceiptFact receipt={receipt} /></li>)}</ul>
+      </details>
       {message.native && <details className="mt-2"><summary className="cursor-pointer">Native correlation (not lifecycle authority)</summary><dl className="mt-2 break-all">{Object.entries(message.native).map(([key, value]) => <div key={key}><dt className="inline font-medium">{key}: </dt><dd className="inline">{value ?? "unknown"}</dd></div>)}</dl></details>}
     </div>
   </article>;
@@ -121,6 +134,8 @@ function ReceiptFact({ receipt }: { receipt: AgentReceipt }) {
   switch (receipt.kind) {
     case "received": text = `Received by exact instance · wake eligible: ${receipt.wakeEligible ? "yes" : "no"} · settings revision ${receipt.settingsRevision ?? "unknown"}${receipt.nativeDeliveryId ? ` · native Delivery observed: ${receipt.nativeDeliveryId} (correlation only; not ACK)` : ""}`; break;
     case "in_context": text = `Context entry observed · ${receipt.durability === "persisted" ? "persisted durability evidenced" : "in memory only; persistence not established"} · entry ${receipt.entryId} · session ${receipt.sessionId}`; break;
+    case "tool_read": text = "Selected by agent_read · not comprehension or native ACK"; break;
+    case "answered": text = `Committed linked reply · ${receipt.replyMessageId} · no ACK required`; break;
     case "native_ack": text = `Native Delivery ACK · ${receipt.deliveryId} (not a generic receipt)`; break;
     case "acknowledged": text = "Explicit message-ID acknowledgement"; break;
     case "attempt": text = `Injection attempt · unconfirmed · ${receipt.attemptId} · settings revision ${receipt.settingsRevision}`; break;
