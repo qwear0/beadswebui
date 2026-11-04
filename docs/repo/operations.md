@@ -13,6 +13,7 @@
 
 - code: `package.json` and `package-lock.json` — scripts, runtime/contributor engine declarations, and locked dependencies.
 - entrypoint: `bin/bead-me-up-scotty.mjs` — `scotty` / `bead-me-up-scotty` launcher.
+- entrypoint: `build.sh` — checkout-local deployment to the existing user systemd service, not Docker.
 - entrypoint: `scripts/serve.mjs` — production supervisor; `instrumentation.ts`, `instrumentation-node.ts`, and `lib/sse-registry.ts` — runtime hooks and stream shutdown.
 - code: `lib/update-service.ts`, `lib/self-update.ts`, `lib/update-types.ts`, and `app/api/update/` — update discovery, exact target contracts, execution, and restart signaling.
 - code: `lib/ai.ts` and `components/ai-assist-panel.tsx` — optional Claude CLI assistance and applying suggestions.
@@ -38,6 +39,17 @@ npm run serve
 ```
 
 These commands describe alternatives; they do not require running both servers together. Do not rebuild or restart a live app merely because documentation changed.
+
+### Agent deployment on this host
+
+- contract: `bash build.sh` deploys clean `main` to the current user's existing `beadswebui.service`. The service must already run the local supervisor with `WorkingDirectory` equal to this checkout. It must have no pending daemon reload or start/stop transition. The script does not install or edit units, use sudo, pull/push Git, or synchronize Beads.
+- contract: Requires Bash, Git, Node/npm compatible with the lockfile, systemctl with a reachable user manager, flock, GNU timeout, curl, and realpath. Use the same Node installation as the service. The current host uses Node 24.19.0, below the contributor recommendation; npm reports the engine warning rather than the script changing version policy.
+- flow: A nonblocking lock in `tmp/deploy/build.lock` excludes concurrent script invocations. Keep the lock file in place. The script stops the service, runs `npm ci --include=dev --no-audit --no-fund` and `npm run build` in production/non-standalone mode, rechecks clean source and unchanged HEAD, then starts the service. **Downtime includes dependency installation and compilation.** Do not edit this checkout or run another updater while deployment is active; the lock does not coordinate with application self-update or manual builds.
+- contract: Success requires an active service and HTTP 200 from `http://192.168.1.168:3015/`, matching this host's LAN binding. Set `DEPLOY_HEALTH_URL` if the binding changes. Requests bypass proxies and do not follow redirects. This checks the launcher page, not Beads project operations.
+- contract: Positive integer timeout overrides in seconds: `INSTALL_TIMEOUT_SEC=900`, `BUILD_TIMEOUT_SEC=1800`, `SERVICE_TIMEOUT_SEC=60`, `WAIT_TIMEOUT_SEC=120`. Individual command kill grace periods and the final readiness probe can extend the wall-clock duration beyond these limits.
+- check: `bash build.sh --check` validates clean `main`, required commands and service configuration without install/build/service changes; it still acquires the deployment lock. It does not prove dependency installation, compilation, or HTTP readiness will succeed.
+- agent-flow: After committing and pushing, follow the background `nohup bash build.sh` command in `AGENTS.md`. Retain output under `tmp/deploy/`, report PID/log, and do not wait for deployment or claim it succeeded merely because it launched. Manual foreground execution waits and returns the deployment exit status.
+- failure: Failures return nonzero with the failed phase. There is no automatic rollback; after stop/install/build failure the service can remain down with incomplete output. Inspect the deployment log, `systemctl --user status beadswebui.service`, and `journalctl --user -u beadswebui.service -n 80 --no-pager`; fix the cause and rerun from clean `main`. Do not blindly start an incomplete build. Readiness failure can leave the service running but unhealthy.
 
 ### Packaged launcher and container
 

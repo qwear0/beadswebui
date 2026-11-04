@@ -29,6 +29,7 @@
 - entrypoint: `instrumentation.ts` and `instrumentation-node.ts` — Node runtime startup and shutdown hooks.
 - entrypoint: `bin/bead-me-up-scotty.mjs` — packaged CLI launcher.
 - entrypoint: `scripts/serve.mjs` — supervised server with update restart handling.
+- entrypoint: `build.sh` — guarded local deployment to the existing user systemd service; see operations for downtime and background agent usage.
 - code: `package.json` and `package-lock.json` — scripts, dependency declarations, and pinned dependency tree.
 - code: `next.config.ts` and `Dockerfile` — build configuration and opt-in standalone container output.
 - contract: `lib/schema.ts` — Beads and mutation schemas; `lib/api-client.ts` — browser API shapes.

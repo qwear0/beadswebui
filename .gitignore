@@ -20,7 +20,8 @@
 # production
 /build
 
-# graphify knowledge-graph output (generated tooling artifacts, not app source)
+# Generated code indexes (including the local CodeGraph cache symlink)
+/.codegraph
 /graphify-out/
 
 # local onboarding doc (generated, not app source)

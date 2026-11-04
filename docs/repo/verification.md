@@ -16,12 +16,14 @@ Run existing tools from the repository root, choosing only checks relevant to th
 npm run lint
 ./node_modules/.bin/tsc --noEmit --incremental false
 node --check scripts/serve.mjs
+bash -n build.sh
 python3 .agents/skills/beadswebui-doc-maintainer/scripts/audit_beadswebui_docs.py .
 ```
 
 - `eslint.config.mjs` defines lint scope; reference design exports and generated Next output are excluded.
 - `tsconfig.json` defines type-check scope and includes generated Next types when present.
 - The documentation auditor checks `docs/repo/` and local skill Markdown; it is not an application test runner.
+- `bash -n build.sh` checks shell syntax. `bash build.sh --help` shows usage; `bash build.sh --check` checks deployment prerequisites from clean `main` without building or changing the service (it acquires a lock). Neither proves a successful deployment. Running without `--check` stops and rebuilds the live service; follow the authorization and background-launch rules in `AGENTS.md` and [operations](operations.md).
 - `npm run build` is available when build/package integration matters. It writes generated output and is not required merely for doc edits. Next build does not replace the explicit lint command.
 
 ## 3. Retirement and retained functionality

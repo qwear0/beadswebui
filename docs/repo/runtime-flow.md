@@ -48,6 +48,7 @@ Live refresh anchors:
 Launcher/build contracts:
 
 - `package.json`: development runs Next dev; build runs Next build; start runs Next start; serve runs the supervisor.
+- `build.sh`: local deployment of clean `main` to the existing user `beadswebui.service`; stops before replacing dependencies/build output, then starts and checks HTTP readiness. This is separate from Docker and application self-update; see [operations](operations.md).
 - `scripts/serve.mjs`: starts Next with `PORT`/`HOST`, sets `BMUS_SUPERVISED`, and relaunches on the update restart exit code 75. Signal handling waits for child exit. No test command override is supported.
 - `bin/bead-me-up-scotty.mjs`: packaged command-line launcher; consult it before changing install/start behavior.
 - `next.config.ts`: standalone output is opt-in through `NEXT_STANDALONE`; normal local launchers use Next start.

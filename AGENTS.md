@@ -47,7 +47,14 @@ This project-owned section governs verification, including the generic quality-g
 
 ## Git
 If there were code edits, create a commit with a description in English and push it.
-After this, if it makes sense and if git status clean, trigger a project rebuild with the command `bash build.sh` and finish the work; do not wait for it to complete.
+After this, if deployment is appropriate and Git status is clean, run `bash build.sh --check`, then launch `bash build.sh` in the background and finish; do not wait for deployment to complete:
+```bash
+mkdir -p tmp/deploy
+log="tmp/deploy/deploy-$(date +%Y%m%d-%H%M%S)-$$.log"
+nohup bash build.sh >"$log" 2>&1 < /dev/null &
+printf 'Deployment started: PID=%s log=%s\n' "$!" "$log"
+```
+The script deploys clean `main` to the existing user `beadswebui.service`, with downtime during install/build. It does not commit, push, use sudo, or touch Beads data. Report the PID/log as a launch, not a completed deployment. See `docs/repo/operations.md` for prerequisites, timeouts, readiness address, and failure recovery.
 Never commit files in folders added to `.gitignore`.
 
 ## General Instructions
