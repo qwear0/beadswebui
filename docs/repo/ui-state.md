@@ -66,6 +66,7 @@ Example bookmark using a registered project ID:
 
 - contract: The theme provider's server snapshot is Light. Hydration first matches that snapshot, then applies the saved theme through `data-theme` and the `dark` class. Do not read browser storage unguarded during server rendering.
 - contract: Preference hooks use local/custom storage notifications so changes can reach consumers in the current and other browser tabs; these are not Beads/SSE events.
+- contract: Board/List reorder requests contain the visible IDs in their desired order. Server persistence and optimistic cache updates replace only those IDs' slots in the saved column order, preserving hidden ranks across facets, archived visibility, and the Done time window. Newly ranked IDs receive appended slots before reordering.
 - contract: Order mutations optimistically update the project order cache, restore the previous value on failure, show an error, then invalidate the order query.
 - contract: Beads SSE is signal-only and invalidates issue/activity data, not every query. Issues poll using response metadata (5 seconds before metadata); activity uses its own 20-second interval. The configured default issue fallback is 30 seconds.
 - contract: The server's Beads watch is shared and non-recursive, with a 200 ms debounce. Nested Dolt rewrites from a read must not trigger another fetch loop. A connected stream alone does not prove its filesystem watch is working.

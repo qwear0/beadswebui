@@ -154,8 +154,11 @@ function CreateForm({
   // rename that folder to the real id and rewrite the refs in the description.
   const taRef = React.useRef<HTMLTextAreaElement>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
-  const uid = React.useId();
-  const draftId = React.useMemo(() => "draft-" + uid.replace(/[^a-zA-Z0-9]/g, ""), [uid]);
+  // useId is only unique within a React root, but draft folders span tabs.
+  const [draftId] = React.useState(() => "draft-" + Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join(""));
 
   // Auto-grow a textarea to fit its content (used by the title field).
   const autosize = (el: HTMLTextAreaElement | null) => {
@@ -193,7 +196,7 @@ function CreateForm({
   );
 
   function submit() {
-    if (!form.title.trim() || create.isPending) return;
+    if (!form.title.trim() || create.isPending || drop.uploading) return;
     create.mutate(
       {
         title: form.title.trim(),
@@ -209,7 +212,10 @@ function CreateForm({
         onSuccess: async (newBead) => {
           if (form.description.includes(`attachment://${draftId}/`)) {
             try {
-              await api.attachments.finalize(projectId, draftId, newBead.id);
+              const { moved } = await api.attachments.finalize(projectId, draftId, newBead.id);
+              if (!moved) {
+                throw new Error("The referenced attachment draft is missing. Upload the images again in the bead details.");
+              }
               const rewritten = form.description.replaceAll(
                 `attachment://${draftId}/`,
                 `attachment://${newBead.id}/`,
@@ -217,7 +223,9 @@ function CreateForm({
               await api.update(projectId, newBead.id, { description: rewritten });
               qc.invalidateQueries({ queryKey: beadsKey(projectId) });
             } catch (e) {
-              toast.error((e as Error).message);
+              toast.error(`Created ${newBead.id}, but attachments could not be finalized`, {
+                description: (e as Error).message,
+              });
             }
           }
           onClose();
@@ -461,7 +469,7 @@ function CreateForm({
         </button>
         <button
           onClick={submit}
-          disabled={!form.title.trim() || create.isPending}
+          disabled={!form.title.trim() || create.isPending || drop.uploading}
           className="flex h-[38px] items-center gap-[7px] rounded-[9px] px-4 text-[13px] font-semibold text-white disabled:opacity-50"
           style={{ background: "var(--brand)", boxShadow: "0 2px 8px -2px var(--brand)" }}
         >

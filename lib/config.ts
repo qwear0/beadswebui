@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { mergeColumnOrder } from "./board-columns";
 
 /**
  * Local app config (NOT stored in beads). Lives as a small JSON file under the
@@ -381,7 +382,7 @@ export function getColumnOrders(projectId: string): Record<string, string[]> {
   return getConfig().orders[projectId] ?? {};
 }
 
-/** Replace the saved order for one column of one project. */
+/** Reorder the supplied IDs without discarding hidden cards' saved ranks. */
 export function setColumnOrder(
   projectId: string,
   columnId: string,
@@ -389,7 +390,7 @@ export function setColumnOrder(
 ): Record<string, string[]> {
   const cfg = getConfig();
   const proj = { ...(cfg.orders[projectId] ?? {}) };
-  proj[columnId] = ids;
+  proj[columnId] = mergeColumnOrder(proj[columnId] ?? [], ids);
   cfg.orders = { ...cfg.orders, [projectId]: proj };
   persist(cfg);
   return proj;

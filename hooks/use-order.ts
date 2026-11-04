@@ -1,6 +1,7 @@
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
+import { mergeColumnOrder } from "@/lib/board-columns";
 import { toastError } from "@/components/error-toast";
 
 /** Manual board ordering, scoped per project (stored in app config). */
@@ -27,7 +28,10 @@ export function useSetOrder(projectId: string) {
       await qc.cancelQueries({ queryKey: KEY });
       const prev = qc.getQueryData<Orders>(KEY);
       qc.setQueryData<Orders>(KEY, (p) => ({
-        orders: { ...(p?.orders ?? {}), [columnId]: ids },
+        orders: {
+          ...(p?.orders ?? {}),
+          [columnId]: mergeColumnOrder(p?.orders[columnId] ?? [], ids),
+        },
       }));
       return { prev };
     },

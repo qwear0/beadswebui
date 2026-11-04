@@ -129,7 +129,7 @@ export async function isBdAvailable(repoPath: string): Promise<boolean> {
 export function createBdStore(repoPath: string): BeadsStore {
   const ro = { repoPath };
   const rw = (actor: string) => ({ repoPath, actor });
-  // Collapse concurrent list() callers (the polling views) onto one in-flight export.
+  // Collapse concurrent list() callers (the polling views) onto one collection read.
   let inflightList: Promise<Bead[]> | null = null;
 
   async function show(id: string): Promise<Bead> {
@@ -152,12 +152,18 @@ export function createBdStore(repoPath: string): BeadsStore {
     kind: "bd",
 
     async list() {
-      // Dedupe concurrent callers onto one in-flight export, and serialize that
-      // export with all other bd ops so reads can't collide with writes/compaction.
       if (inflightList) return inflightList;
-      inflightList = serializeWrite(repoPath, async () =>
-        parseExport(await runBdRaw(["export", "--json"], ro)),
-      );
+      inflightList = serializeWrite(repoPath, async () => {
+        const beads = parseExport(await runBdRaw(["export", "--json"], ro));
+        // Project infra filters can hide gates from export and redirect typed
+        // lists to the wisp plane. Use an inclusive export, but add only gates.
+        // Keep closed gates too: absent targets are treated as unresolved.
+        const gates = parseExport(await runBdRaw(["export", "--all", "--json"], ro))
+          .filter((bead) => bead.issue_type === "gate");
+        const byId = new Map(beads.map((bead) => [bead.id, bead]));
+        for (const gate of gates) byId.set(gate.id, gate);
+        return [...byId.values()];
+      });
       try {
         return await inflightList;
       } finally {

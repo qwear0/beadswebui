@@ -67,6 +67,18 @@ export function sortBoardCards(
   });
 }
 
+/**
+ * Partial views may reorder only their own slots; hidden IDs keep their ranks.
+ * Newly ranked cards get slots at the end before the visible order is applied.
+ */
+export function mergeColumnOrder(saved: string[], ids: string[]): string[] {
+  const reordered = [...new Set(ids)];
+  const visible = new Set(reordered);
+  const complete = [...new Set([...saved, ...reordered])];
+  let next = 0;
+  return complete.map((id) => visible.has(id) ? reordered[next++] : id);
+}
+
 /** Preserve saved manual order, falling back to priority for unranked cards. */
 export function sortByOrder(cards: Bead[], order?: string[]): Bead[] {
   return sortBoardCards(cards, "manual", order);

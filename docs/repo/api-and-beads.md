@@ -43,7 +43,7 @@ The following paths are relative to `/api/p/{projectId}`. This is a route-family
 | `/agents/conversations`, `/agents/conversations/{threadId}` | GET | Paged read-only conversation summaries and thread messages/independent receipt facts. |
 | `/doctor` | GET | Project/store diagnostic information. |
 | `/activity`, `/insights`, `/gamification` | GET | Derived activity and dashboard data. |
-| `/order` | GET, PUT | Read or replace a column's saved manual ordering. |
+| `/order` | GET, PUT | Read manual ordering; reorder supplied IDs while preserving hidden ranks. |
 | `/attachments` | POST, PUT | Multipart image upload; finalize a draft folder to a real issue ID. |
 | `/attachments/{...path}` | GET | Serve a stored attachment. |
 | `/publish` | POST | Generate, open, or explicitly deploy a showcase. |
@@ -60,6 +60,7 @@ App-level routes are `/api/projects` (GET/POST), `/api/projects/{id}` (PATCH/DEL
 - contract: Dependencies from flat export records and expanded show results normalize to a single dependency-link shape. Expanded issue timestamps must not become link timestamps.
 - contract: Backlog creation maps to Beads `deferred`. Closing uses the dedicated CLI close path so a reason is recorded at close time, not as an unrelated later update.
 - contract: Image uploads use multipart fields `file` and `beadId`, accept image MIME types up to 15 MiB, and return an `attachment://` reference plus a project-scoped URL. Demo has no attachment folder.
+- contract: Each create-form draft uses a stable cryptographically random token, independent of other tabs. Creation waits for uploads to finish. Draft references are rewritten only after finalization returns `moved: true`; a missing draft (`moved: false`) leaves the references unchanged and reports the created issue ID with the attachment failure.
 
 ### Agent read boundary
 
@@ -73,7 +74,7 @@ App-level routes are `/api/projects` (GET/POST), `/api/projects/{id}` (PATCH/DEL
 
 - contract: Commands run with the selected repository as `cwd`, `BD_JSON_ENVELOPE=1`, and the supplied `BEADS_ACTOR`. JSON responses are unwrapped; exports are parsed as JSONL issue records.
 - contract: Issue-data CLI operations, including reads, serialize per repository inside the application process because embedded Dolt reads can rewrite database state. This queue does not coordinate unrelated external CLI processes.
-- contract: Concurrent list requests share one in-flight export. Preserve serialization when adding store methods; do not parallelize same-repository reads as a cosmetic optimization.
+- contract: Concurrent list requests share one in-flight collection read: the default export plus an inclusive `export --all` filtered strictly to gate records. This includes closed dependency targets and gates classified as infrastructure without adding unrelated infrastructure or memories. Exported gates retain their own dependency links for approval readiness. Preserve serialization when adding store methods; do not parallelize same-repository reads as a cosmetic optimization.
 - contract: Missing/invalid real-project stores return errors. Only the explicit Demo project uses the in-memory implementation.
 
 ### Errors
