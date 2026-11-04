@@ -46,7 +46,7 @@ This project-owned section governs verification, including the generic quality-g
 - The existing local-only Beads export guidance below remains valid; do not introduce remote synchronization or publish issue data.
 
 ## Git
-If there were code edits, create a commit with a description in Russian and push it.
+If there were code edits, create a commit with a description in English and push it.
 After this, if it makes sense and if git status clean, trigger a project rebuild with the command `bash build.sh` and finish the work; do not wait for it to complete.
 Never commit files in folders added to `.gitignore`.
 
