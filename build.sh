@@ -44,7 +44,7 @@ for value in "$INSTALL_TIMEOUT_SEC" "$BUILD_TIMEOUT_SEC" "$SERVICE_TIMEOUT_SEC" 
         exit 2
     }
 done
-for cmd in git node npm systemctl flock timeout curl realpath; do
+for cmd in git node npm systemctl flock timeout curl realpath grep; do
     command -v "$cmd" >/dev/null || fail "'$cmd' is required"
 done
 
@@ -104,7 +104,22 @@ fi
 PHASE=stop
 STOP_REQUESTED=true
 "${SYSTEMCTL[@]}" stop "$SERVICE"
-[[ "$("${SYSTEMCTL[@]}" show "$SERVICE" -p ActiveState --value)" == inactive ]] || fail 'service did not stop'
+# A stop timeout can leave the unit failed after systemd has killed every process.
+# State alone is not proof of shutdown: require no tracked PIDs or populated cgroup.
+STOP_STATE="$("${SYSTEMCTL[@]}" show "$SERVICE" -p ActiveState --value)"
+case "$STOP_STATE" in
+    inactive|failed) ;;
+    *) fail "service did not stop (state: $STOP_STATE)" ;;
+esac
+[[ "$("${SYSTEMCTL[@]}" show "$SERVICE" -p MainPID --value)" == 0 &&
+    "$("${SYSTEMCTL[@]}" show "$SERVICE" -p ControlPID --value)" == 0 ]] || fail 'service still has a tracked process'
+SERVICE_CGROUP="$("${SYSTEMCTL[@]}" show "$SERVICE" -p ControlGroup --value)"
+if [[ -n "$SERVICE_CGROUP" ]]; then
+    grep -qx 'populated 0' "/sys/fs/cgroup${SERVICE_CGROUP}/cgroup.events" || fail 'cannot confirm the service cgroup is empty'
+fi
+if [[ "$STOP_STATE" == failed ]]; then
+    echo 'WARNING: service stop ended in failed state, but no service processes remain; continuing deployment' >&2
+fi
 
 export CI=true NODE_ENV=production NEXT_STANDALONE=""
 export BUILD_SHA="$(git rev-parse --short=7 "$REVISION")"
