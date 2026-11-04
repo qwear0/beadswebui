@@ -34,7 +34,6 @@ export function AgentsView() {
       <Icon name="user" size={18} className="text-[var(--text-2)]" />
       <h1 className="text-[15px] font-[650]">Agents</h1>
       <span className="text-[12px] text-[var(--text-3)]">· runtime presence and read-only conversations · not inferred from Beads activity</span>
-      <button className={`${agentControlClass} ml-auto`} disabled={query.isFetching} onClick={() => void query.refetch()}>{query.isFetching ? "Refreshing…" : "Refresh presence"}</button>
     </header>
     <div className="max-h-[35vh] shrink-0 overflow-y-auto"><AgentCrossFilters agents={agents} unavailable={!!query.error || query.data?.availability === "unavailable"} /></div>
     <div className="bd-scroll min-h-0 flex-1 overflow-y-auto p-4 md:p-6">

@@ -175,7 +175,6 @@ function TopologyGroup({ group, events, ready, continuity, now, unavailable, vis
         </div>
         <div className={styles.workers}>
           {group.workers.map(worker => <CompactAgent key={agentKey(worker)} agent={worker} now={now} unavailable={unavailable} event={ownerKey ? events.get(pairKey(ownerKey, agentKey(worker))) : undefined} />)}
-          {!group.workers.length && <p className={styles.noWorkers}>No online workers in the current filter</p>}
         </div>
       </div>
     </div>
@@ -191,15 +190,15 @@ function CompactAgent({ agent, now, unavailable, context, owner, event }: {
   const mailWakePaused = agent.role === "coordinator" && agent.capabilities.coordinatorMail && agent.suspended;
   const status = unavailable ? "freshness unknown" : agent.conflict ? "instance conflict" : agent.liveness;
   const tool = agent.currentTools[0];
-  const title = `${agent.label}\n${agentKey(agent)}\n${agent.summary ?? "No published work summary"}`;
+  const title = `${agent.label}\n${agentKey(agent)}${agent.summary ? `\n${agent.summary}` : ""}`;
   return <button type="button" className={styles.agent} data-owner={owner ? "true" : undefined} data-worker={!owner ? agentKey(agent) : undefined} data-selected={selected} data-role={agent.role} aria-pressed={selected} aria-label={`${selected ? "Clear filter for" : "Filter by"} ${agent.label}, ${agent.role}, ${status}, ${agent.workState}${mailWakePaused ? ", mail auto-wake paused; agent execution is not blocked" : ""}`} title={title}
     onClick={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })}>
     <span className={styles.cardTop}><span>{agent.role}{context ? " · context" : ""}</span><span className={styles.status} data-live={live} data-error={agent.conflict || agent.workState === "error"}><i />{status}</span></span>
     <strong className={styles.name}>{agent.label} <code>{agent.instanceId.slice(-6)}</code></strong>
     <span className={styles.model} title={agent.model ? `${agent.model.provider} / ${agent.model.id}` : undefined}>{agent.model?.id ?? "Model unknown"}</span>
-    <span className={styles.summary}>{agent.summary ?? "No published work summary"}</span>
-    <span className={styles.work}><b>{agent.workState}</b>{mailWakePaused && <span className="line-through" title="Mail-triggered automatic starts are paused. Agent execution is not blocked. Resume in Pi with a new user run or /agent-workspace resume.">auto-wake</span>}<span title={tool?.name}>{tool ? `${tool.name} · ${elapsedTime(tool.startedAt, live ? now : Date.parse(agent.observedAt))}${agent.currentTools.length > 1 ? ` +${agent.currentTools.length - 1}` : ""}` : "No observed tool"}</span></span>
-    <span className={styles.cardBottom}><span title={agent.projectId ?? undefined}>{agent.projectId ?? "Unlinked project"}</span><code>{agent.bead?.beadId ?? "No bead"}</code></span>
+    {agent.summary && <span className={styles.summary}>{agent.summary}</span>}
+    <span className={styles.work}><b>{agent.workState}</b>{mailWakePaused && <span className="line-through" title="Mail-triggered automatic starts are paused. Agent execution is not blocked. Resume in Pi with a new user run or /agent-workspace resume.">auto-wake</span>}{tool && <span title={tool.name}>{`${tool.name} · ${elapsedTime(tool.startedAt, live ? now : Date.parse(agent.observedAt))}${agent.currentTools.length > 1 ? ` +${agent.currentTools.length - 1}` : ""}`}</span>}</span>
+    <span className={styles.cardBottom}><span title={agent.projectId ?? undefined}>{agent.projectId ?? "Unlinked project"}</span>{agent.bead && <code>{agent.bead.beadId}</code>}</span>
     {!owner && <span className={styles.event} title={event ? `${event.kind} · ${event.updatedAt} · observed native projection, not delivery confirmation` : undefined}>{event ? `${event.kind} · ${elapsedTime(event.updatedAt, now)} ago · observed` : "No loaded native message"}</span>}
   </button>;
 }

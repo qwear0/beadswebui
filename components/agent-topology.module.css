@@ -40,7 +40,7 @@
 .missing > span { font-size: 8px; letter-spacing: .04em; }
 .missing p { margin: 5px 0; font-size: 11px; }
 .missing small { display: block; font-size: 9px; line-height: 1.5; }
-.noWorkers, .empty { padding: 16px; font-size: 11px; color: var(--text-2); }
+.empty { padding: 16px; font-size: 11px; color: var(--text-2); }
 .empty { border: 1px dashed var(--border-strong); border-radius: 6px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 9px; font-size: 9px; line-height: 1.5; color: var(--text-2); }
 .legend > span { display: inline-flex; align-items: center; gap: 6px; }
