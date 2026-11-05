@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { initials, avatarColor, needsHuman, readyHumanGate } from "@/lib/beads-view";
 import { useGamification } from "@/hooks/use-beads";
+import { useAgents } from "@/hooks/use-agents";
 // GITHUB_REPO is shared with the build badge (where bug/feature issues are filed).
 import { GITHUB_REPO } from "@/lib/build-info";
 import { BuildBadge } from "@/components/build-badge";
@@ -61,6 +62,15 @@ export function Sidebar({
   const { meta, beads, index } = useApp();
   const actor = meta?.humanActor ?? "you";
   const epicCount = beads.filter((b) => b.issue_type === "epic").length;
+  const agentsQuery = useAgents(projectId);
+  const agentSnapshot = agentsQuery.data;
+  const onlineAgentCount =
+    !agentsQuery.error &&
+    agentSnapshot &&
+    agentSnapshot.availability !== "unavailable" &&
+    agentSnapshot.errors.length === 0
+      ? agentSnapshot.agents.filter((agent) => agent.liveness === "online").length
+      : null;
   // "Needs You" = agent-flagged beads (bd human) + ready human-approval gates.
   const needsYouCount =
     beads.filter(needsHuman).length + beads.filter((b) => readyHumanGate(b, index)).length;
@@ -110,6 +120,9 @@ export function Sidebar({
               <span className="flex-1">{n.label}</span>
               {n.key === "epics" && epicCount > 0 && (
                 <span className="font-mono text-[11px] text-[var(--text-3)]">{epicCount}</span>
+              )}
+              {n.key === "agents" && onlineAgentCount !== null && onlineAgentCount > 0 && (
+                <span className="font-mono text-[11px] text-[var(--text-3)]">{onlineAgentCount}</span>
               )}
               {n.key === "needsyou" && needsYouCount > 0 && (
                 <span
