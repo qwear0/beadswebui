@@ -61,6 +61,9 @@ function create(root: string): Entry {
     observer.pages.clear(); notify();
   }
   function hint(filename: string | Buffer | null, kind: "presence" | "history" | "config" | "root") {
+    const name = filename === null ? null : String(filename);
+    // Atomic-write temporaries and producer locks are not committed history.
+    if (name?.startsWith(".tmp-") || (kind === "root" && name?.startsWith(".") && name.endsWith(".lock"))) return;
     if (kind === "history" || (kind === "root" && (!filename || !["presence", "installation.json"].includes(String(filename))))) pendingHistory = true;
     clearTimeout(debounce);
     debounce = setTimeout(() => {
@@ -78,34 +81,57 @@ function create(root: string): Entry {
     // directory can recover. Polling remains the backstop for missed hints.
     add(path.dirname(root), [], "root");
     add(root, [], "root"); add(root, ["presence"], "presence");
-    for (const agent of observer.presence.agents) add(root, ["presence", agent.agentId], "presence");
     add(root, ["messages"], "history"); add(root, ["receipts"], "history"); add(root, ["processing"], "history");
     const now = new Date().toISOString();
     add(root, ["messages", now.slice(0, 10)], "history");
     add(root, ["messages", now.slice(0, 10), now.slice(11, 13)], "history");
-    for (const parts of historyPaths.values()) add(root, parts, "history");
+    const problems = new Map<string, AgentTelemetryError>();
+    const problem = (error: AgentTelemetryError) => { problems.set(`${error.source}:${error.code}`, error); };
     try {
       const config = configRoot();
       add(config, [], "config"); add(config, ["pi-quality-runtime"], "config"); add(config, ["bead-me-up-scotty"], "config");
-    } catch (error) { observer.errors = [telemetry("state", error)]; }
-    for (const [name, watcher] of watchers) { if (!wanted.has(name)) { watcher.close(); watchers.delete(name); } }
+    } catch (error) { problem(telemetry("state", error)); }
+    // Reserve live watch capacity for current instances before retained history.
+    // Ended/stale snapshots are still read by the 10-second presence poll. Watching
+    // the presence parent discovers new agent directories without watching all old ones.
+    const timestamp = Date.now();
+    for (const agent of observer.presence.agents) {
+      if (agent.liveness !== "ended" && Math.abs(timestamp - Date.parse(agent.observedAt)) <= 45_000) add(root, ["presence", agent.agentId], "presence");
+    }
+    for (const parts of [...historyPaths.values()].reverse()) add(root, parts, "history");
+    const selected = new Map<string, { safe: string; kind: "presence" | "history" | "config" | "root" }>();
     for (const [name, spec] of wanted) {
-      if (watchers.has(name)) continue;
-      if (watchers.size >= 512) { observer.errors = [{ source: "state", code: "watch_limit", message: "Agent observer watch limit reached; bounded polling recovery remains active" }]; break; }
       try {
         const safe = checkedPath(spec.root, spec.parts);
         if (!fs.lstatSync(safe).isDirectory()) continue;
-        const watcher = fs.watch(safe, { persistent: false, recursive: false }, (_event, filename) => hint(filename, spec.kind));
+        if (selected.size >= 512) {
+          problem({ source: "state", code: "watch_limit", message: "Live watch capacity reached; presence polling every 10 seconds and history recovery every 60 seconds remain active" });
+          break;
+        }
+        selected.set(name, { safe, kind: spec.kind });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") problem(telemetry("state", error));
+      }
+    }
+    // Reconcile the selected set before allocating: old low-priority watches must
+    // not keep a newly current agent from obtaining a slot.
+    for (const [name, watcher] of watchers) { if (!selected.has(name)) { watcher.close(); watchers.delete(name); } }
+    for (const [name, spec] of selected) {
+      if (watchers.has(name)) continue;
+      try {
+        const watcher = fs.watch(spec.safe, { persistent: false, recursive: false }, (_event, filename) => hint(filename, spec.kind));
         watcher.on("error", () => {
           watcher.close(); watchers.delete(name);
-          observer.errors = [{ source: "state", code: "watch_unavailable", message: "An agent filesystem watch failed; bounded polling recovery remains active" }];
           changedHistory(); refresh(true);
         });
         watchers.set(name, watcher);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") observer.errors = [telemetry("state", error)];
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        problem({ source: "state", code: "watch_unavailable", message: "An agent filesystem watch could not be established; periodic presence and history refresh remain active" });
       }
     }
+    // Diagnostics describe this reconciliation, not any past transient failure.
+    observer.errors = [...problems.values()];
   }
   function refresh(force: boolean) {
     if (!force && Date.now() - lastRefresh < 1000) return;

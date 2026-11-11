@@ -197,9 +197,9 @@ export function readPresence(root: string): PresenceProjection {
             const { address: exact, activity, provenance, version: _version, ...rest } = raw;
             void _version;
             agents.push({ ...rest, ...exact, source: provenance, workState: activity, linkage: raw.projectId ? "linked" : "unlinked", conflict: false });
-          } catch (error) { errors.push(telemetry("presence", error, recordId ?? undefined)); }
+          } catch (error) { if (!missing(error)) errors.push(telemetry("presence", error, recordId ?? undefined)); }
         }
-      } catch (error) { errors.push(telemetry("presence", error)); }
+      } catch (error) { if (!missing(error)) errors.push(telemetry("presence", error)); }
       if (remaining < 0) break;
     }
     return { availability: "available", agents, errors };

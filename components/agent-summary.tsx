@@ -13,10 +13,18 @@ export function AgentStatusNotice({ data, isLoading, error }: { data?: AgentsRes
   if (isLoading && !data) return <p role="status" className="p-3 text-xs text-muted-foreground">Loading runtime agents…</p>;
   if (data?.availability === "demo") return <p className="p-3 text-xs text-muted-foreground">Demo has no real agents or conversations. No runtime connection or messages are created.</p>;
   if (!error && data?.availability !== "unavailable" && !data?.errors.length) return null;
-  return <div role="status" className="space-y-1 p-3 text-xs text-destructive">
-    {(error || data?.availability === "unavailable") && <p>Agent runtime unavailable. {error?.message} Last observed data, if present, is not proof of a live session.</p>}
-    {!!data?.errors.length && <p>Projection errors may leave the observed fleet incomplete.</p>}
-    {data?.errors.map((item, i) => <p key={`${item.code}/${i}`} className="break-words">{item.source}: {item.code} · {item.message}{item.recordId ? ` · ${item.recordId}` : ""}</p>)}
+  const pollingWarnings = data?.errors.filter(item => item.source === "state" && ["watch_limit", "watch_unavailable"].includes(item.code)) ?? [];
+  const projectionErrors = data?.errors.filter(item => !pollingWarnings.includes(item)) ?? [];
+  return <div role="status" className="space-y-1 p-3 text-xs">
+    {(error || data?.availability === "unavailable") && <p className="text-destructive">Agent runtime unavailable. {error?.message} Last observed data, if present, is not proof of a live session.</p>}
+    {!!projectionErrors.length && <div className="space-y-1 text-destructive">
+      <p>Projection errors may leave the observed fleet incomplete.</p>
+      {projectionErrors.map((item, i) => <p key={`${item.code}/${i}`} className="break-words">{item.source}: {item.code} · {item.message}{item.recordId ? ` · ${item.recordId}` : ""}</p>)}
+    </div>}
+    {!!pollingWarnings.length && <div className="space-y-1 text-amber-600 dark:text-amber-400">
+      <p>Some live updates may be delayed. Periodic refresh remains active; this warning alone does not mean agents are missing.</p>
+      {pollingWarnings.map((item, i) => <p key={`${item.code}/${i}`} className="break-words">{item.source}: {item.code} · {item.message}</p>)}
+    </div>}
   </div>;
 }
 
