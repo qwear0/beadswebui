@@ -10,8 +10,7 @@ import type { DashboardEventRef, DashboardSettings, DashboardSummaryResponse } f
 
 const recent = new Map<string, string>();
 const failures = new Map<string, { message: string; until: number }>();
-let tail: Promise<unknown> = Promise.resolve();
-let queued = 0;
+let generating = false;
 const cacheDir = () => path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "bead-me-up-scotty", "dashboard-summaries");
 // Length is a prompt target, not a rejection or rewriting rule.
 const valid = (text: unknown): text is string => typeof text === "string" && text.trim().length > 0;
@@ -69,6 +68,7 @@ async function generate(settings: DashboardSettings, events: Record<string, unkn
 async function prepare(events: DashboardEventRef[], settings: DashboardSettings) {
   const summaries: Record<string, string> = {};
   const errors: Record<string, string> = {};
+  const retryAfterMs: Record<string, number> = {};
   const pending: Record<string, unknown> = {};
   const cacheKeys = new Map<string, string>();
   for (const event of events) {
@@ -80,18 +80,20 @@ async function prepare(events: DashboardEventRef[], settings: DashboardSettings)
       const value = await cached(cacheKey);
       if (value) { summaries[key] = value; continue; }
       const failure = failures.get(cacheKey);
-      if (failure && failure.until > Date.now()) { errors[key] = failure.message; continue; }
+      if (failure && failure.until > Date.now()) {
+        errors[key] = failure.message;
+        retryAfterMs[key] = Math.max(0, failure.until - Date.now());
+        continue;
+      }
       failures.delete(cacheKey);
       pending[key] = input;
     } catch (error) { errors[key] = error instanceof Error ? error.message : "Описание недоступно."; }
   }
-  return { summaries, errors, pending, cacheKeys };
+  return { summaries, errors, retryAfterMs, pending, cacheKeys };
 }
 
-async function summarize(events: DashboardEventRef[], settings: DashboardSettings): Promise<DashboardSummaryResponse> {
-  // Recheck cache/registration after waiting; another viewer may have generated
-  // this batch, or a project may have been removed while it was queued.
-  const { summaries, errors, pending, cacheKeys } = await prepare(events, settings);
+async function summarize(prepared: Awaited<ReturnType<typeof prepare>>, settings: DashboardSettings): Promise<DashboardSummaryResponse> {
+  const { summaries, errors, retryAfterMs, pending, cacheKeys } = prepared;
   // Exactly one generation request for the uncached batch. Keep the model's
   // text as returned: no length rejection, padding, truncation or repair call.
   if (Object.keys(pending).length) {
@@ -113,22 +115,28 @@ async function summarize(events: DashboardEventRef[], settings: DashboardSetting
   for (const key of Object.keys(pending)) {
     const message = errors[key] ?? "Модель не вернула описание события.";
     errors[key] = message;
-    failures.set(cacheKeys.get(key)!, { message, until: Date.now() + 300_000 });
+    retryAfterMs[key] = 300_000;
+    failures.set(cacheKeys.get(key)!, { message, until: Date.now() + retryAfterMs[key] });
   }
   while (failures.size > 5000) failures.delete(failures.keys().next().value!);
-  return { summaries, errors };
+  return { summaries, errors, retryAfterMs };
 }
 
-/** Serialize generation so concurrent viewers share the persistent cache rather
- * than submit duplicate billable requests. Bound queued work, not just HTTP size. */
-export async function summarizeDashboardEvents(events: DashboardEventRef[]) {
+/** One generation at a time, without keeping other viewers' HTTP connections
+ * waiting in a server queue. Cached results remain immediately available. */
+export async function summarizeDashboardEvents(events: DashboardEventRef[]): Promise<DashboardSummaryResponse> {
   const settings = await getDashboardSettings();
   const prepared = await prepare(events, settings);
-  // Cached cards must not wait behind a slow unrelated generation request.
-  if (!Object.keys(prepared.pending).length) return { summaries: prepared.summaries, errors: prepared.errors };
-  if (queued >= 20) throw new Error("Очередь описаний заполнена; попробуйте позже.");
-  queued++;
-  const job = tail.then(() => summarize(events, settings));
-  tail = job.catch(() => {});
-  return job.finally(() => { queued--; });
+  const { summaries, errors, retryAfterMs, pending } = prepared;
+  if (!Object.keys(pending).length) return { summaries, errors, retryAfterMs };
+  if (generating) {
+    for (const key of Object.keys(pending)) {
+      errors[key] = "Создание описаний занято. Повторите позже.";
+      retryAfterMs[key] = 10_000;
+    }
+    return { summaries, errors, retryAfterMs };
+  }
+  generating = true;
+  try { return await summarize(prepared, settings); }
+  finally { generating = false; }
 }

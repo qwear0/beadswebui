@@ -45,4 +45,6 @@ export interface DashboardActivityResponse {
 export interface DashboardSummaryResponse {
   summaries: Record<string, string>;
   errors: Record<string, string>;
+  /** Remaining cooldowns, not server-clock timestamps. Retries are explicit. */
+  retryAfterMs: Record<string, number>;
 }

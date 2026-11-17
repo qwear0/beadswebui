@@ -38,19 +38,22 @@ function remember(event: EventDraft, input: unknown, projects: string[]): Dashbo
   return { ...event, key };
 }
 
-// Do not run bd on presence heartbeats or once per summary/card. Project list
-// reads share a short-lived promise; individual unavailable projects stay explicit.
-let beadCache: { scope: string; until: number; promise: Promise<{ items: DashboardEvent[]; errors: string[] }> } | undefined;
+// Cache each project independently, including in-flight reads. Summary source
+// reconstruction must not evict the global feed's cache or duplicate a slow read.
+type BeadActivity = { items: DashboardEvent[]; errors: string[] };
+const beadCaches = new Map<string, { scope: string; until: number; promise: Promise<BeadActivity> }>();
 async function beadActivity(registry: Registry) {
   const config = getConfig();
   const projects = config.projects.filter(project => registry.ids.includes(project.id));
-  const scope = digest({ registry: registry.revision, projects: projects.map(p => [p.id, p.path, p.name]), allowlist: config.humanAllowlist });
-  if (beadCache?.scope === scope && beadCache.until > Date.now()) return beadCache.promise;
-  const promise = (async () => {
-    const items: DashboardEvent[] = [];
-    const errors: string[] = [];
-    // Keep CLI pressure bounded across repositories as well as within each store.
-    for (const project of projects) {
+  const registered = new Set(config.projects.map(project => project.id));
+  for (const id of beadCaches.keys()) if (!registered.has(id)) beadCaches.delete(id);
+  const readProject = (project: typeof projects[number]) => {
+    const scope = digest({ project: [project.id, project.path, project.name], allowlist: config.humanAllowlist });
+    const cached = beadCaches.get(project.id);
+    if (cached?.scope === scope && cached.until > Date.now()) return cached.promise;
+    const promise = (async (): Promise<BeadActivity> => {
+      const items: DashboardEvent[] = [];
+      const errors: string[] = [];
       try {
         const beads = await (await getStore(project.id)).list();
         const interactions = readInteractions(project.path);
@@ -72,11 +75,22 @@ async function beadActivity(registry: Registry) {
           items.push(remember({ id: `${project.id}/${item.id}`, source: "bead", projectId: project.id, projectName: project.name, issueId: item.issueId, actor: item.actor, title: item.title, at: item.at }, input, [project.id]));
         }
       } catch { errors.push(`Не удалось загрузить события проекта ${project.name}.`); }
-    }
-    return { items, errors };
-  })();
-  beadCache = { scope, until: Date.now() + 15_000, promise };
-  return promise;
+      return { items, errors };
+    })();
+    const entry = { scope, until: Infinity, promise };
+    beadCaches.set(project.id, entry);
+    // Start the TTL at completion, so a read longer than the TTL is still shared.
+    void promise.then(() => { entry.until = Date.now() + 15_000; });
+    return promise;
+  };
+  const items: DashboardEvent[] = [];
+  const errors: string[] = [];
+  // Two independent repositories at a time; each store still serializes its CLI.
+  for (let offset = 0; offset < projects.length; offset += 2) {
+    const results = await Promise.all(projects.slice(offset, offset + 2).map(readProject));
+    for (const result of results) { items.push(...result.items); errors.push(...result.errors); }
+  }
+  return { items, errors };
 }
 
 function mailEvent(message: AgentMessage, names: Map<string, string>, agents: AgentSnapshot[]) {

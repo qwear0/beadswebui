@@ -100,7 +100,8 @@ function useAgentStream(projectId?: string) {
 export function useAgents(projectId?: string) {
   const { live } = useAgentStream(projectId);
   return useQuery({
-    queryKey: agentsKey(projectId), queryFn: () => api.agents(projectId),
+    queryKey: agentsKey(projectId),
+    queryFn: ({ signal }) => api.agents(projectId, AbortSignal.any([signal, AbortSignal.timeout(15_000)])),
     refetchInterval: projectId === "demo" ? false : live ? 45_000 : 15_000,
   });
 }

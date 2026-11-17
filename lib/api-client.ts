@@ -166,12 +166,12 @@ function agentPageQuery(options: AgentPageOptions = {}): string {
 }
 
 export const api = {
-  dashboardActivity: (cursor?: string | null) => request<DashboardActivityResponse>(`/api/dashboard/activity${cursor ? `?cursor=${enc(cursor)}` : ""}`, { cache: "no-store" }),
+  dashboardActivity: (cursor?: string | null, signal?: AbortSignal) => request<DashboardActivityResponse>(`/api/dashboard/activity${cursor ? `?cursor=${enc(cursor)}` : ""}`, { cache: "no-store", signal }),
   dashboardSettings: () => request<DashboardSettings>("/api/dashboard/settings", { cache: "no-store" }),
   saveDashboardSettings: (settings: DashboardSettings) => request<DashboardSettings>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify(settings) }),
-  dashboardSummaries: (events: DashboardEventRef[]) => request<DashboardSummaryResponse>("/api/dashboard/summaries", { method: "POST", body: JSON.stringify({ events }) }),
+  dashboardSummaries: (events: DashboardEventRef[]) => request<DashboardSummaryResponse>("/api/dashboard/summaries", { method: "POST", body: JSON.stringify({ events }), signal: AbortSignal.timeout(210_000) }),
   dashboardMessage: (id: string) => request<{ message: AgentMessage; errors: AgentTelemetryError[] }>(`/api/dashboard/messages/${enc(id)}`, { cache: "no-store" }),
-  agents: (projectId?: string) => request<AgentsResponse>(agentsBase(projectId), { cache: "no-store" }),
+  agents: (projectId?: string, signal?: AbortSignal) => request<AgentsResponse>(agentsBase(projectId), { cache: "no-store", signal }),
   agentConversations: (projectId?: string, options?: AgentPageOptions) =>
     request<AgentConversationsResponse>(`${agentsBase(projectId)}/conversations${agentPageQuery(options)}`, { cache: "no-store" }),
   agentMessages: (threadId: string, projectId?: string, options?: AgentPageOptions) =>
