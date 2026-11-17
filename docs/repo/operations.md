@@ -105,6 +105,7 @@ These commands describe alternatives; they do not require running both servers t
 
 - check: Use [verification policy](verification.md). For documentation-only edits, the read-only documentation auditor is sufficient; do not run updates, AI calls, deployments, or a production build merely to verify prose.
 - failure-clue: A missing production build prevents packaged launch. An occupied explicit port is an error by design; the supervisor does not auto-select another port.
+- failure-clue: Next.js can terminate a build with `SecurityFatalError` after successful compilation when its installed version has a known vulnerability. Upgrade to a patched release and keep `eslint-config-next` aligned; do not treat compilation alone as a successful build or disable the security check to restore deployment.
 - failure-clue: A 403 with `host_not_allowed` or `cross_origin` points to addressed host/origin configuration, not missing issue data. Do not weaken checks without verifying the intended binding/proxy setup.
 - failure-clue: An update blocked by a dirty/diverged checkout is protective. A failed install/build after source advancement requires inspecting the reported step and actual checkout; do not assume a rollback or restart occurred.
 - failure-clue: A showcase deployment can return HTTP success with `deployed: false` and manual instructions. A generated path belongs to the server filesystem, not necessarily the browser's machine.
