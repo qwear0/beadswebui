@@ -80,17 +80,24 @@ async function beadActivity(registry: Registry) {
 }
 
 function mailEvent(message: AgentMessage, names: Map<string, string>, agents: AgentSnapshot[]) {
-  const label = (address: AgentMessage["sender"]) => agents.find(a => a.agentId === address.agentId && a.instanceId === address.instanceId)?.label ?? "Agent";
+  const participantName = (address: AgentMessage["sender"], frozen: string | undefined, projectId: string) => {
+    if (frozen) return frozen;
+    const agent = agents.find(a => a.agentId === address.agentId && a.instanceId === address.instanceId);
+    return agent?.name ?? (agent ? `${names.get(projectId) ?? projectId}:${agent.label}:${agent.sessionId.slice(0, 4)}`
+      : `${names.get(projectId) ?? projectId} · ${address.agentId.slice(0, 12)}`);
+  };
+  const senderName = participantName(message.sender, message.senderName, message.senderProjectId);
+  const recipientName = participantName(message.recipient, message.recipientName, message.recipientProjectId);
   const from = names.get(message.senderProjectId) ?? message.senderProjectId;
   const to = names.get(message.recipientProjectId) ?? message.recipientProjectId;
   const input = {
     type: "agent_message", kind: message.kind, transport: message.transport, nativeKind: message.native?.kind,
-    sender: label(message.sender), senderProject: from, recipient: label(message.recipient), recipientProject: to,
+    sender: senderName, senderProject: from, recipient: recipientName, recipientProject: to,
     task: message.bead, body: message.body, at: message.acceptedAt,
   };
   return remember({ id: message.messageId, source: "message", messageId: message.messageId, threadId: message.threadId,
     projectId: message.senderProjectId, projectName: from === to ? from : `${from} → ${to}`,
-    actor: label(message.sender), title: message.body.slice(0, 180), at: message.acceptedAt,
+    senderName, recipientName, actor: senderName, title: message.body.slice(0, 180), at: message.acceptedAt,
   }, input, [message.senderProjectId, message.recipientProjectId]);
 }
 

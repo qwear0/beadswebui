@@ -30,7 +30,7 @@ interface EventBase extends DashboardEventRef {
 }
 export type DashboardEvent = EventBase & (
   | { source: "bead"; issueId: string }
-  | { source: "message"; messageId: string; threadId: string }
+  | { source: "message"; messageId: string; threadId: string; senderName: string; recipientName: string }
 );
 /** Compare instants, not ISO spellings: sources may use different offsets/precision. */
 export function compareDashboardEvents(a: { at: string; id: string }, b: { at: string; id: string }): number {

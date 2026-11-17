@@ -17,6 +17,7 @@ const MAX_RECORD = 65536;
 const MAX_ENTRIES = 4096;
 const id = z.string().regex(NATIVE);
 const displayName = z.string().max(1024);
+const agentName = z.string().min(1).max(120).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/);
 const project = z.string().regex(PROJECT).refine((s) => s !== "demo");
 const address = z.object({ agentId: z.string().regex(AGENT), instanceId: z.string().regex(INSTANCE) });
 const messageId = z.string().regex(MESSAGE);
@@ -27,7 +28,7 @@ const native = z.object({ bindingId: id, dispatchId: id, taskId: id, messageId: 
 const parent = z.object({ agentId: z.string().regex(AGENT), instanceId: z.string().regex(INSTANCE).nullable(), sessionId: id, bindingId: id, dispatchId: id, taskId: id });
 const snapshotSchema = z.object({
   version: z.literal(1), address, installationId: z.uuid(), sessionId: id,
-  label: z.string().max(120), projectId: project.nullable(), cwd: canonicalPath,
+  name: agentName.optional(), label: z.string().max(120), projectId: project.nullable(), cwd: canonicalPath,
   worktree: canonicalPath.nullable(), commonDir: canonicalPath.nullable(), bead: bead.nullable(),
   summary: z.string().max(500).nullable(), model: z.object({ provider: displayName, id: displayName }).nullable(),
   role: z.enum(["coordinator", "worker", "unverified"]), parent: parent.nullable(),
@@ -40,7 +41,8 @@ const snapshotSchema = z.object({
 });
 const envelopeSchema = z.object({
   version: z.literal(1), messageId, operationKey: z.string().regex(OPERATION), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
-  sender: address, recipient: address, senderProjectId: project, recipientProjectId: project,
+  sender: address, recipient: address, senderName: agentName.optional(), recipientName: agentName.optional(),
+  senderProjectId: project, recipientProjectId: project,
   bead: bead.nullable(), threadId: messageId, inReplyTo: messageId.nullable(), kind: z.enum(["note", "question", "reply"]),
   body: z.string().refine((s) => Buffer.byteLength(s, "utf8") <= 16384), acceptedAt: timestamp,
   transport: z.enum(["coordinator_mail", "native_projection"]), native: native.nullable(),

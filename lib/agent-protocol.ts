@@ -5,6 +5,8 @@ export interface AgentTelemetryError { code: string; message: string; source: "p
 export interface AgentParent { agentId: string; instanceId: string | null; sessionId: string; bindingId: string; dispatchId: string; taskId: string }
 export interface AgentTool { id: string; name: string; startedAt: string }
 export interface AgentSnapshot extends AgentAddress {
+  /** Stable readable Beads actor; absent on older runtime snapshots. */
+  name?: string;
   label: string;
   role: "coordinator" | "worker" | "unverified";
   parent: AgentParent | null;
@@ -71,6 +73,9 @@ export interface AgentMessage {
   threadId: string;
   sender: AgentAddress;
   recipient: AgentAddress;
+  /** Participant names frozen by the producer; absent on legacy envelopes. */
+  senderName?: string;
+  recipientName?: string;
   senderProjectId: string;
   recipientProjectId: string;
   bead: AgentBeadRef | null;

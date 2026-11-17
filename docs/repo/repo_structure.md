@@ -46,7 +46,7 @@
 - zone: `lib/config.ts` owns application/project configuration; `lib/bd.ts` invokes Beads in the selected repository.
 - zone: `lib/beads-watch.ts` and `lib/sse-registry.ts` own server stream notification/lifecycle; `hooks/use-beads-stream.ts` owns browser invalidation.
 - zone: `lib/agent-watch.ts`, `lib/agent-api.ts`, `app/api/agents/`, and project agent routes own one shared read-only agent projection/stream. `hooks/use-agents.ts` keeps presence/history queries separate from Beads; agent components and `hooks/use-agent-filters.ts` own the browser surface.
-- owner-rule: The existing external `pi_quality_runtime` extension owns identity, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
+- owner-rule: The existing external `pi_quality_runtime` extension owns identity, stable Herdr-derived Beads names, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
 - zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns AI-assist integration. `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts` own global activity aggregation, separate settings, and cached Neuro-gate descriptions; they do not own runtime messaging.
 - zone: `lib/update-service.ts`, `lib/self-update.ts`, and `lib/update-types.ts` own update coordination and contracts.
 - zone: `lib/themes.ts`, `components/theme-provider.tsx`, and `app/globals.css` own theme registry, selection, and palettes.
