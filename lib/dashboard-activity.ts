@@ -2,15 +2,17 @@ import "server-only";
 import { getConfig } from "./config";
 import { getStore } from "./store";
 import { buildActivity, readInteractions } from "./interactions";
-import { canonicalStateRoot, digest, readHistory, readMessage, readRegistry, readPresence, MESSAGE, type Registry } from "./agent-projection";
-import type { DashboardActivityResponse, DashboardEvent, DashboardEventRef } from "./dashboard-types";
+import { AgentReadError, canonicalStateRoot, digest, readHistory, readMessage, readProjectRegistry, readRegistry, readPresence, MESSAGE, type Registry } from "./agent-projection";
+import { compareDashboardEvents, type DashboardActivityResponse, type DashboardEvent, type DashboardEventRef } from "./dashboard-types";
 import type { AgentMessage, AgentSnapshot } from "./agent-protocol";
 
 type EventDraft = Omit<Extract<DashboardEvent, { source: "bead" }>, "key"> | Omit<Extract<DashboardEvent, { source: "message" }>, "key">;
 interface SummarySource { id: string; input: unknown; projects: string[] }
 const sources = new Map<string, SummarySource>();
 export async function summarySource(ref: DashboardEventRef) {
-  const registry = readRegistry();
+  // Beads use the same project registry as their individual Activity views.
+  // Mail still requires strict canonical-path attribution across all projects.
+  const registry = MESSAGE.test(ref.id) ? readRegistry() : readProjectRegistry();
   // Route bundles and server restarts need not share this short-lived map.
   // Reconstruct from server-owned records, never from client-supplied prose.
   if (!sources.has(ref.key)) {
@@ -41,19 +43,20 @@ function remember(event: EventDraft, input: unknown, projects: string[]): Dashbo
 let beadCache: { scope: string; until: number; promise: Promise<{ items: DashboardEvent[]; errors: string[] }> } | undefined;
 async function beadActivity(registry: Registry) {
   const config = getConfig();
-  const scope = digest({ registry: registry.revision, projects: registry.ids, names: config.projects.map(p => [p.id, p.name]), allowlist: config.humanAllowlist });
+  const projects = config.projects.filter(project => registry.ids.includes(project.id));
+  const scope = digest({ registry: registry.revision, projects: projects.map(p => [p.id, p.path, p.name]), allowlist: config.humanAllowlist });
   if (beadCache?.scope === scope && beadCache.until > Date.now()) return beadCache.promise;
   const promise = (async () => {
     const items: DashboardEvent[] = [];
     const errors: string[] = [];
     // Keep CLI pressure bounded across repositories as well as within each store.
-    for (const project of config.projects.filter(p => registry.ids.includes(p.id))) {
+    for (const project of projects) {
       try {
         const beads = await (await getStore(project.id)).list();
         const interactions = readInteractions(project.path);
         const byId = new Map(beads.map(bead => [bead.id, bead]));
         const rawById = new Map(interactions.map(event => [event.id ?? `${event.issue_id}-${event.created_at}`, event]));
-        for (const item of buildActivity(beads, interactions, config.humanAllowlist).slice(0, 150)) {
+        for (const item of buildActivity(beads, interactions, config.humanAllowlist).sort(compareDashboardEvents).slice(0, 150)) {
           const bead = byId.get(item.issueId);
           const commentIndex = item.id.startsWith(`${item.issueId}-comment-`) ? Number(item.id.slice(`${item.issueId}-comment-`.length)) : -1;
           const comment = commentIndex >= 0 ? bead?.comments?.[commentIndex] : undefined;
@@ -92,22 +95,27 @@ function mailEvent(message: AgentMessage, names: Map<string, string>, agents: Ag
 }
 
 export async function dashboardActivity(cursor?: string | null): Promise<DashboardActivityResponse> {
-  const registry = readRegistry();
-  const projects = getConfig().projects.filter(project => registry.ids.includes(project.id));
-  const names = new Map(projects.map(project => [project.id, project.name]));
-  const root = canonicalStateRoot();
-  const presence = readPresence(root);
-  const beads = cursor ? { items: [], errors: [] } : await beadActivity(registry);
+  const projectRegistry = readProjectRegistry();
+  const names = new Map(getConfig().projects.filter(project => projectRegistry.ids.includes(project.id)).map(project => [project.id, project.name]));
+  const beads = cursor ? { items: [], errors: [] } : await beadActivity(projectRegistry);
   const errors = [...beads.errors];
   const items = [...beads.items];
   let nextCursor: string | null = null;
-  if (presence.availability === "unavailable") errors.push("История сообщений агентов недоступна.");
-  else {
-    const history = readHistory(root, registry, undefined, undefined, cursor, 100, true);
-    items.push(...history.messages.map(message => mailEvent(message, names, presence.agents)));
-    nextCursor = history.nextCursor;
-    if (history.errors.length) errors.push("Часть истории сообщений агентов не удалось прочитать.");
+  try {
+    const registry = readRegistry();
+    const root = canonicalStateRoot();
+    const presence = readPresence(root);
+    if (presence.availability === "unavailable") errors.push("История сообщений агентов недоступна.");
+    else {
+      const history = readHistory(root, registry, undefined, undefined, cursor, 100, true);
+      items.push(...history.messages.map(message => mailEvent(message, names, presence.agents)));
+      nextCursor = history.nextCursor;
+      if (history.errors.length) errors.push("Часть истории сообщений агентов не удалось прочитать.");
+    }
+  } catch (error) {
+    if (!(error instanceof AgentReadError) || error.status < 500) throw error;
+    errors.push(`История сообщений агентов недоступна: ${error.message}`);
   }
-  items.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+  items.sort(compareDashboardEvents);
   return { items, nextCursor, errors };
 }

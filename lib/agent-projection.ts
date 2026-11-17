@@ -143,19 +143,37 @@ function committed(entry: fs.Dirent, pattern: RegExp): string | null {
 }
 
 export interface Registry { ids: string[]; revision: string }
-/** Read current registry rather than getConfig's cached, permissively sanitized view. */
-export function readRegistry(): Registry {
+/** Read current registration without requiring every checkout to be mounted. */
+function registryEntries() {
   try {
     const parsed = z.object({ projects: z.array(z.object({ id: project, path: canonicalPath })).max(4096) }).parse(readJson(configRoot(), ["bead-me-up-scotty", "config.json"], 1024 * 1024));
     const ids = new Set<string>();
-    const paths = new Set<string>();
     for (const item of parsed.projects) {
       if (ids.has(item.id)) throw new AgentReadError("invalid_registry", "Project registration has duplicate IDs");
+      ids.add(item.id);
+    }
+    return parsed.projects;
+  } catch (error) {
+    if (error instanceof AgentReadError) throw error;
+    throw new AgentReadError("registry_unavailable", "Current project registration is missing, unreadable or invalid");
+  }
+}
+/** Beads availability is checked per project by its store, not by the mail registry. */
+export function readProjectRegistry(): Registry {
+  const projects = registryEntries();
+  return { ids: projects.map(item => item.id).sort(), revision: digest(projects) };
+}
+/** Mail attribution additionally requires unambiguous, available canonical paths. */
+export function readRegistry(): Registry {
+  try {
+    const projects = registryEntries();
+    const paths = new Set<string>();
+    for (const item of projects) {
       const canonical = fs.realpathSync(item.path);
       if (paths.has(canonical)) throw new AgentReadError("ambiguous_registry", "Project registration has ambiguous canonical paths");
-      ids.add(item.id); paths.add(canonical);
+      paths.add(canonical);
     }
-    return { ids: [...ids].sort(), revision: digest(parsed.projects) };
+    return { ids: projects.map(item => item.id).sort(), revision: digest(projects) };
   } catch (error) {
     if (error instanceof AgentReadError) throw error;
     throw new AgentReadError("registry_unavailable", "Current project registration is missing, unreadable or invalid");

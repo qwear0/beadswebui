@@ -89,7 +89,7 @@ export function AgentCrossFilters({ agents, unavailable = false }: { agents: Age
   </div>;
 }
 
-export function BeadAgentLinks({ beadId, onNavigate }: { beadId: string; onNavigate: () => void }) {
+export function BeadAgentLinks({ beadId, onNavigate, onNavigateAgent }: { beadId: string; onNavigate: () => void; onNavigateAgent?: (agent: AgentSnapshot) => void }) {
   const { projectId } = useApp();
   const query = useAgents(projectId);
   const { setFilters } = useAgentFilters();
@@ -99,8 +99,12 @@ export function BeadAgentLinks({ beadId, onNavigate }: { beadId: string; onNavig
     <AgentStatusNotice data={query.data} isLoading={query.isLoading} error={query.error} />
     {!query.isLoading && !query.error && query.data?.availability === "available" && agents.length === 0 && <p className="text-xs text-muted-foreground">No explicit runtime links to this bead were found in readable snapshots. Assignees and historical actors are not live-session evidence.</p>}
     <div className="flex flex-wrap gap-2">{agents.map(agent => <button key={agentKey(agent)} className={agentControlClass} onClick={() => {
-      onNavigate();
-      setFilters({ agentId: agent.agentId, instanceId: agent.instanceId, issueId: beadId, epicId: null, threadId: null }, "agents");
+      if (onNavigateAgent) {
+        onNavigateAgent(agent);
+      } else {
+        onNavigate();
+        setFilters({ agentId: agent.agentId, instanceId: agent.instanceId, issueId: beadId, epicId: null, threadId: null }, "agents");
+      }
     }}>{agent.label} · {agent.liveness} · {agent.workState}{agent.conflict ? " · conflict" : ""}</button>)}</div>
   </section>;
 }

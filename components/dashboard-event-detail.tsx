@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { useBeads } from "@/hooks/use-beads";
@@ -22,6 +23,7 @@ function LoadingDetail({ error, onClose }: { error?: string; onClose: () => void
 }
 function DashboardBeadDetail({ projectId, issueId, onClose }: { projectId: string; issueId: string; onClose: () => void }) {
   const query = useBeads(projectId);
+  const router = useRouter();
   const [trail, setTrail] = React.useState([issueId]);
   const beads = query.data?.beads ?? [];
   const index = makeIndex(beads);
@@ -33,7 +35,11 @@ function DashboardBeadDetail({ projectId, issueId, onClose }: { projectId: strin
     projectId, beads, index, meta: query.data.meta, humanAllowlist: query.data.meta.humanAllowlist,
     readOnly: true, loading: false, selectedBeadId: openId, selectBead: () => {},
     openDetail: pushDetail, pushDetail, openCreate: () => {}, openEpic: pushDetail,
-  }}><BeadDetailDrawer centered openId={openId} canGoBack={trail.length > 1} backTo={trail[trail.length - 2]} onBack={() => setTrail(current => current.slice(0, -1))} onClose={onClose} /></AppProvider>;
+  }}><BeadDetailDrawer centered openId={openId} canGoBack={trail.length > 1} backTo={trail[trail.length - 2]} onBack={() => setTrail(current => current.slice(0, -1))} onClose={onClose} onNavigateAgent={agent => {
+    const params = new URLSearchParams({ view: "agents", agent: agent.agentId, instance: agent.instanceId, issue: openId });
+    router.push(`/p/${encodeURIComponent(projectId)}?${params}`);
+    onClose();
+  }} /></AppProvider>;
 }
 
 function DashboardMessageDetail({ messageId, agents, onClose }: { messageId: string; agents: AgentSnapshot[]; onClose: () => void }) {

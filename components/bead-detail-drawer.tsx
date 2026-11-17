@@ -15,6 +15,7 @@ import { Icon, typeIconName } from "@/components/icons";
 import { OriginBadge, PriorityChip } from "@/components/board/bead-card";
 import { CopyableId } from "@/components/copyable-id";
 import { BeadAgentLinks } from "@/components/agent-summary";
+import type { AgentSnapshot } from "@/lib/agent-protocol";
 import { useApp, type DetailAction } from "@/components/app-context";
 import { useImageDrop } from "@/hooks/use-image-drop";
 import { useResizableWidth } from "@/hooks/use-resizable-width";
@@ -128,6 +129,7 @@ export function BeadDetailDrawer({
   initialAction = "view",
   actionNonce = 0,
   centered = false,
+  onNavigateAgent,
 }: {
   openId: string | null;
   /** True when a trail exists behind the current bead (GH #15). */
@@ -139,6 +141,8 @@ export function BeadDetailDrawer({
   initialAction?: DetailAction;
   actionNonce?: number;
   centered?: boolean;
+  /** Override project-shell filter navigation when embedded outside that shell. */
+  onNavigateAgent?: (agent: AgentSnapshot) => void;
 }) {
   const { index, readOnly } = useApp();
   const bead = openId ? index.get(openId) : undefined;
@@ -192,6 +196,7 @@ export function BeadDetailDrawer({
               backTo={backTo ?? null}
               onBack={onBack}
               onClose={onClose}
+              onNavigateAgent={onNavigateAgent}
               dirtyRef={dirtyRef}
             />
           ) : (
@@ -210,6 +215,7 @@ function DrawerBody({
   backTo,
   onBack,
   onClose,
+  onNavigateAgent,
   dirtyRef,
 }: {
   bead: Bead;
@@ -218,6 +224,7 @@ function DrawerBody({
   backTo: string | null;
   onBack?: () => void;
   onClose: () => void;
+  onNavigateAgent?: (agent: AgentSnapshot) => void;
   dirtyRef: React.RefObject<boolean>;
 }) {
   const { index, beads, humanAllowlist, meta, projectId, pushDetail, openCreate, readOnly } =
@@ -1024,7 +1031,7 @@ function DrawerBody({
           </Section>
         )}
 
-        <BeadAgentLinks beadId={bead.id} onNavigate={onClose} />
+        <BeadAgentLinks beadId={bead.id} onNavigate={onClose} onNavigateAgent={onNavigateAgent} />
 
         {/* Comments */}
         <Section>

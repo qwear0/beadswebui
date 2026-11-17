@@ -32,6 +32,11 @@ export type DashboardEvent = EventBase & (
   | { source: "bead"; issueId: string }
   | { source: "message"; messageId: string; threadId: string }
 );
+/** Compare instants, not ISO spellings: sources may use different offsets/precision. */
+export function compareDashboardEvents(a: { at: string; id: string }, b: { at: string; id: string }): number {
+  return Date.parse(b.at) - Date.parse(a.at) || b.id.localeCompare(a.id);
+}
+
 export interface DashboardActivityResponse {
   items: DashboardEvent[];
   nextCursor: string | null;

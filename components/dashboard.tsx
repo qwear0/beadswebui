@@ -11,7 +11,7 @@ import { useDashboardActivity, useDashboardSettings } from "@/hooks/use-dashboar
 import { AgentPresenceCard } from "@/components/agent-topology";
 import { DashboardSettingsDialog } from "@/components/dashboard-settings";
 import { DashboardEventDetail } from "@/components/dashboard-event-detail";
-import type { DashboardEvent, DashboardEventRef, DashboardSettings } from "@/lib/dashboard-types";
+import { compareDashboardEvents, type DashboardEvent, type DashboardEventRef, type DashboardSettings } from "@/lib/dashboard-types";
 
 export function Dashboard() {
   const agents = useAgents();
@@ -55,7 +55,7 @@ function DashboardFeed({ settings, onSelect }: { settings: DashboardSettings; on
   const [batches, setBatches] = React.useState<DashboardEventRef[][]>([]);
   const byId = new Map<string, DashboardEvent>();
   for (const page of query.data?.pages ?? []) for (const item of page.items) if (!byId.has(item.id)) byId.set(item.id, item);
-  const items = [...byId.values()].sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+  const items = [...byId.values()].sort(compareDashboardEvents);
   const displayed = items.slice(0, limit);
   const signature = displayed.map(item => item.key).join("/");
   const results = useQueries({ queries: batches.map(batch => ({
@@ -95,7 +95,7 @@ function DashboardFeed({ settings, onSelect }: { settings: DashboardSettings; on
   const oldestMail = items.filter(item => item.source === "message").at(-1)?.at;
   const cutoff = displayed.at(-1)?.at;
   const { isFetching, error, hasNextPage, fetchNextPage } = query;
-  const needsMail = !!hasNextPage && (!oldestMail || !cutoff || oldestMail >= cutoff);
+  const needsMail = !!hasNextPage && (!oldestMail || !cutoff || Date.parse(oldestMail) >= Date.parse(cutoff));
   React.useEffect(() => {
     if (needsMail && !isFetching && !error) void fetchNextPage();
   }, [needsMail, isFetching, error, fetchNextPage]);
