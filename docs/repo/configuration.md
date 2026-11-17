@@ -33,6 +33,9 @@
 | State | Location / scope | Owner |
 | --- | --- | --- |
 | Project registry, actor/allowlist, polling interval, gamification flag, board order | `config.json` in the app config directory | `lib/config.ts` |
+| Dashboard model, reasoning effort, and prompt | Separate `dashboard.json` in the app config directory | `lib/dashboard-settings.ts`; [Dashboard](dashboard.md) |
+| Dashboard consumer credential | Server environment or restricted `neuro-gate-token` file in the app config directory | Operator provisioning; never returned in settings |
+| Generated Dashboard descriptions | App subdirectory under `XDG_CACHE_HOME`, default `~/.cache` | `lib/dashboard-summaries.ts`; local private cache |
 | Issues, dependencies, comments, workflow state | Selected repository's `.beads` data, accessed through `bd` | `lib/bd.ts` |
 | Images | Selected repository's `.beads/attachments` directory | `app/api/p/[projectId]/attachments/route.ts` |
 | Activity input | Selected repository's `.beads/interactions.jsonl`, read alongside issue data | `lib/interactions.ts` |
@@ -45,6 +48,7 @@
 - contract: The app config directory is `$XDG_CONFIG_HOME/bead-me-up-scotty`, or `~/.config/bead-me-up-scotty` when the variable is unset.
 - contract: pi_qr reads only project IDs/paths from this registry; it does not reconstruct IDs or own another registry. Agent message attribution is fixed at acceptance. See [Agent Workspace](agent-workspace.md) for canonical worktree mapping, exact identity and read isolation.
 - contract: Runtime `agentMessaging.autoWake` defaults on with a uniquely persisted revision; invalid/unreadable settings suppress wake. Revision changes never make already-received backlog wakeable. This setting is separate from app config PUT and never wakes workers.
+- contract: Dashboard settings use their own atomic, error-reporting persistence and are not part of general config PUT or runtime wake policy. See [Dashboard](dashboard.md).
 - contract: App configuration in `lib/config.ts` is cached in the server process. Its writes are best-effort: a failed disk write can still leave an app setting effective for the current process. A successful app-settings response is not proof of durable storage; this is not the runtime wake-policy persistence contract.
 - contract: Manual column order is a project/column-to-issue-ID mapping in app configuration, not an issue field.
 - contract: Global settings PUT accepts `humanActor`, `humanAllowlist`, `pollIntervalMs` (1,000–300,000), and `gamification`; registry/order use their own endpoints.
@@ -64,6 +68,9 @@
 | `SCOTTY_ALLOWED_HOSTS` | Comma-separated allowed hostnames; see [operations](operations.md) before exposing the server. |
 | `SCOTTY_LANE_PREFIX` | Optional Focus-view label prefix, for example `ctx:`. |
 | `CLAUDE_BIN` | Optional AI-assist executable; default `claude`. |
+| `NEURO_GATE_URL` | Server-side Dashboard inference base; default `http://127.0.0.1:8080/v1`. |
+| `NEURO_GATE_TOKEN`, `NEURO_GATE_TOKEN_FILE` | Dashboard consumer token or restricted token file; no browser credential fields. See [Dashboard](dashboard.md). |
+| `XDG_CACHE_HOME` | Base directory for private generated Dashboard descriptions; default `~/.cache`. |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | Usage-statistics ingestion settings; an explicitly empty key disables sending. |
 | `PORT`, `HOST` | Local launcher/supervisor binding; defaults are 3000 and localhost. |
 

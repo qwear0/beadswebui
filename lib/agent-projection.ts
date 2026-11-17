@@ -244,8 +244,8 @@ function validDay(day: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === day;
 }
 function encodeCursor(cursor: Cursor) { return Buffer.from(JSON.stringify(cursor)).toString("base64url"); }
-function pageCursor(raw: string | null | undefined, registry: Registry, projectId?: string, threadId?: string): Cursor {
-  const scope = digest({ projects: registry.ids, registry: registry.revision, projectId: projectId ?? null });
+function pageCursor(raw: string | null | undefined, registry: Registry, projectId?: string, threadId?: string, activity = false): Cursor {
+  const scope = digest({ projects: registry.ids, registry: registry.revision, projectId: projectId ?? null, ...(activity ? { order: "newest-first" } : {}) });
   if (raw !== undefined && raw !== null) {
     try {
       if (raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error();
@@ -269,6 +269,18 @@ function canonicalEnvelope(root: string, message: string): Envelope | null {
   if ((envelope.transport === "native_projection") !== (envelope.native !== null)) throw new AgentReadError("invalid_transport", "Message transport and native provenance disagree");
   return envelope;
 }
+/** Exact authorized detail read, without scanning an entire thread. */
+export function readMessage(root: string, registry: Registry, messageId: string, includeReceipts = true) {
+  const raw = canonicalEnvelope(root, messageId);
+  if (!raw || !allowed(raw, registry)) throw new AgentReadError("message_not_found", "Message is not available in registered projects", 404);
+  const { version: _version, operationKey: _operationKey, requestHash: _requestHash, ...envelope } = raw;
+  void _version; void _operationKey; void _requestHash;
+  const errors: AgentTelemetryError[] = [];
+  const receipts = includeReceipts ? readReceipts(root, raw, errors, { remaining: 4096 }) : [];
+  const message: AgentMessage = { ...envelope, receipts, answeredBy: receipts.filter((fact): fact is Extract<AgentReceipt, { kind: "answered" }> => fact.kind === "answered").map(fact => fact.replyMessageId) };
+  return { message, errors };
+}
+
 function allowed(envelope: Envelope, registry: Registry, projectId?: string) {
   // Both participants must still be registered. A project request can see only
   // messages actually attributed to it, even when a pointer was malformed.
@@ -312,9 +324,9 @@ function readReceipts(root: string, envelope: Envelope, errors: AgentTelemetryEr
 /** Enumerate bounded directory metadata, then read at most 256 canonical records
  * in at most four hourly partitions. Presence reconciliation never calls this.
  */
-export function readHistory(root: string, registry: Registry, projectId: string | undefined, threadId: string | undefined, rawCursor: string | null | undefined, limit: number) {
+export function readHistory(root: string, registry: Registry, projectId: string | undefined, threadId: string | undefined, rawCursor: string | null | undefined, limit: number, activity = false) {
   if (threadId && !MESSAGE.test(threadId)) throw new AgentReadError("invalid_thread", "Invalid conversation thread ID", 400);
-  const cursor = pageCursor(rawCursor, registry, projectId, threadId);
+  const cursor = pageCursor(rawCursor, registry, projectId, threadId, activity);
   const projects = projectId ? [projectId] : registry.ids;
   const errors: AgentTelemetryError[] = [];
   const envelopes: Envelope[] = [];
@@ -369,7 +381,7 @@ export function readHistory(root: string, registry: Registry, projectId: string 
         for (const entry of directory(root, ["history", participant, day, hour], true)) {
           if (--pointerBudget < 0) throw new AgentReadError("history_pointer_limit", "Aggregate history pointer read limit exceeded");
           const message = committed(entry, MESSAGE);
-          if (!message || message > cursor.highwater || (key === `${cursor.day}/${cursor.hour}` && cursor.after && message <= cursor.after)) continue;
+          if (!message || message > cursor.highwater || (key === `${cursor.day}/${cursor.hour}` && cursor.after && (activity ? message >= cursor.after : message <= cursor.after))) continue;
           if (dateParts(message).join("/") !== key) throw new AgentReadError("history_partition_mismatch", "Message pointer is in the wrong UTC partition");
           ids.set(message, [...(ids.get(message) ?? []), participant]);
         }
@@ -377,6 +389,7 @@ export function readHistory(root: string, registry: Registry, projectId: string 
     }
     if (errors.length) break;
     const sorted = [...ids.keys()].sort();
+    if (activity) sorted.reverse();
     for (let position = 0; position < sorted.length; position++) {
       const message = sorted[position];
       examined++;
@@ -401,11 +414,13 @@ export function readHistory(root: string, registry: Registry, projectId: string 
       }
     }
   }
-  const messages: AgentMessage[] = threadId ? envelopes.map((raw) => {
+  const messages: AgentMessage[] = threadId || activity ? envelopes.map((raw) => {
     const { version: _version, operationKey: _operationKey, requestHash: _requestHash, ...envelope } = raw;
     void _version; void _operationKey; void _requestHash;
     watchPaths.push(["receipts", envelope.messageId], ["processing", envelope.messageId]);
-    const receipts = readReceipts(root, raw, errors, receiptsBudget);
+    // The global feed needs bodies, not a receipt scan per event. Details read
+    // independent receipt facts only when the user opens a message.
+    const receipts = activity ? [] : readReceipts(root, raw, errors, receiptsBudget);
     return { ...envelope, receipts, answeredBy: [...new Set([
       ...receipts.filter((fact): fact is Extract<AgentReceipt, { kind: "answered" }> => fact.kind === "answered").map(fact => fact.replyMessageId),
       ...envelopes.filter(reply => isReplyTo(reply, raw)).map(reply => reply.messageId),

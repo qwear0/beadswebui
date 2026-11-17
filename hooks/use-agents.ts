@@ -49,6 +49,7 @@ function subscribe(qc: QueryClient, projectId: string | undefined, listener: (st
           }
           const recovering = created.state.continuity === null;
           if (next.history !== revisions.history || (recovering && !recoveryPending)) {
+            if (projectId === undefined) void qc.invalidateQueries({ queryKey: ["dashboard", "activity"] });
             const refreshed = qc.invalidateQueries({ queryKey: agentConversationsKey(projectId) });
             void qc.invalidateQueries({ queryKey: ["agents", projectId ?? null, "messages"] });
             if (recovering) {

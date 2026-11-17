@@ -1,5 +1,7 @@
 "use client";
 import * as React from "react";
+import Link from "next/link";
+import { LayoutDashboard } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { useTheme } from "@/components/theme-provider";
 import { useApp, type View } from "@/components/app-context";
@@ -103,6 +105,7 @@ export function Sidebar({
 
 
       <nav className="flex flex-col gap-[2px]">
+        <Link href="/dashboard" onClick={onProjectNavigate} className="flex w-full items-center gap-[10px] rounded-[9px] px-[10px] py-2 text-[13.5px] font-medium text-[var(--text-2)] hover:bg-[var(--surface-2)]"><LayoutDashboard size={17} /><span>Dashboard</span></Link>
         {navViews(!!meta?.gamification).map((n) => {
           const active = view === n.key;
           return (

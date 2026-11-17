@@ -85,13 +85,14 @@ export function AgentConversation({ projectId, contextProjectId, insideIds, issu
   </section>;
 }
 
-function Address({ address, agents }: { address: AgentAddress; agents: AgentSnapshot[] }) {
+function Address({ address, agents, interactive = true }: { address: AgentAddress; agents: AgentSnapshot[]; interactive?: boolean }) {
   const { setFilters } = useAgentFilters();
   const agent = agents.find(item => agentKey(item) === agentKey(address));
+  if (!interactive) return <span className="break-all">{agent?.label ?? "Agent"} · {address.agentId} / {address.instanceId}</span>;
   return <button className="break-all text-left text-[var(--brand)] underline focus-visible:outline focus-visible:outline-2" onClick={() => setFilters({ agentId: address.agentId, instanceId: address.instanceId })}>{agent?.label ?? "Agent"} · {address.agentId} / {address.instanceId}</button>;
 }
 
-function MessageCard({ message, agents }: { message: AgentMessage; agents: AgentSnapshot[] }) {
+export function MessageCard({ message, agents, interactive = true }: { message: AgentMessage; agents: AgentSnapshot[]; interactive?: boolean }) {
   const received = message.receipts.find(fact => fact.kind === "received");
   const shown = message.receipts.find(fact => fact.kind === "in_context" && fact.durability === "persisted")
     ?? message.receipts.find(fact => fact.kind === "in_context");
@@ -99,8 +100,8 @@ function MessageCard({ message, agents }: { message: AgentMessage; agents: Agent
   return <article className="min-w-0 rounded-lg border border-border bg-[var(--surface)] p-3 text-xs">
     <h4 className="mb-2 break-all font-mono font-medium">{message.kind} · {message.messageId}</h4>
     <dl className="space-y-1 text-muted-foreground">
-      <div><dt className="inline font-medium">From: </dt><dd className="inline"><Address address={message.sender} agents={agents} /> · sender project <ProjectIdentity projectId={message.senderProjectId} /></dd></div>
-      <div><dt className="inline font-medium">To: </dt><dd className="inline"><Address address={message.recipient} agents={agents} /> · recipient project <ProjectIdentity projectId={message.recipientProjectId} /></dd></div>
+      <div><dt className="inline font-medium">From: </dt><dd className="inline"><Address address={message.sender} agents={agents} interactive={interactive} /> · sender project <ProjectIdentity projectId={message.senderProjectId} /></dd></div>
+      <div><dt className="inline font-medium">To: </dt><dd className="inline"><Address address={message.recipient} agents={agents} interactive={interactive} /> · recipient project <ProjectIdentity projectId={message.recipientProjectId} /></dd></div>
       <div><dt className="inline font-medium">Transport: </dt><dd className="inline">{message.transport}</dd></div>
       <div><dt className="inline font-medium">{message.transport === "coordinator_mail" ? "Durably accepted" : "Native fact projected"}: </dt><dd className="inline">{message.acceptedAt}</dd></div>
       <div><dt className="inline font-medium">Reply to: </dt><dd className="inline break-all">{message.inReplyTo ?? "none"}</dd></div>

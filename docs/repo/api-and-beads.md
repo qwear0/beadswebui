@@ -70,6 +70,11 @@ App-level routes are `/api/projects` (GET/POST), `/api/projects/{id}` (PATCH/DEL
 - contract: Conversation summaries and answeredBy are bounded observations, not a complete thread scan. Receipt facts distinguish memory from persisted context and native ACK from generic acknowledgement; a missing fact is not a negative delivery verdict.
 - contract: Agent responses distinguish available, unavailable and demo, with structured source-specific errors. Missing settings mean the runtime default is autoWake=true, with a null/uninitialized revision and diagnostic, not evidence that wake is active. Invalid/unreadable settings remain unknown/error, not an enabled fallback. The app never initializes runtime settings or fabricates a persisted effective revision.
 
+### Global Dashboard boundary
+
+- contract: `/api/dashboard/activity` (GET) merges the current Activity window from every registered real project and paged sanitized mail; `/api/dashboard/messages/{messageId}` (GET) reads exact authorized message details. Neither endpoint sends mail or consumes native Delivery.
+- contract: `/api/dashboard/settings` (GET/PUT) exposes only model, effort and prompt. `/api/dashboard/summaries` (POST) accepts up to four observed event references (`key` and `id`) and returns generated descriptions/per-event errors. Credentials stay server-side; these app-level operations remain available in viewer mode. See [Dashboard](dashboard.md) for caching, provider exposure, and single-request generation.
+
 ### CLI boundary
 
 - contract: Commands run with the selected repository as `cwd`, `BD_JSON_ENVELOPE=1`, and the supplied `BEADS_ACTOR`. JSON responses are unwrapped; exports are parsed as JSONL issue records.

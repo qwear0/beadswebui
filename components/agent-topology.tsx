@@ -190,6 +190,16 @@ function CompactAgent({ agent, now, unavailable, context, owner, event }: {
 }) {
   const { filters, setFilters } = useAgentFilters();
   const selected = !!filters.agentId && matchesAgent(agent, filters);
+  return <AgentPresenceCard agent={agent} now={now} unavailable={unavailable} context={context} owner={owner} event={event} selected={selected}
+    onSelect={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })} />;
+}
+
+/** Shared card presentation; the global dashboard deliberately has no action. */
+export function AgentPresenceCard({ agent, now, unavailable, context, owner, event, selected = false, onSelect, projectName }: {
+  agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation;
+  selected?: boolean; onSelect?: () => void; projectName?: string;
+}) {
+  const Card = onSelect ? "button" : "article";
   const live = !unavailable && agent.liveness === "online" && !agent.conflict;
   const mailWakePaused = agent.role === "coordinator" && agent.capabilities.coordinatorMail && agent.suspended;
   const status = unavailable ? "freshness unknown" : agent.conflict ? "instance conflict" : agent.liveness;
@@ -197,8 +207,8 @@ function CompactAgent({ agent, now, unavailable, context, owner, event }: {
   const displayLabel = workerDisplayLabel(agent);
   const summary = agent.summary ?? "";
   const title = `${displayLabel}\n${agentKey(agent)}${summary ? `\n${summary}` : ""}`;
-  return <button type="button" className={styles.agent} data-owner={owner ? "true" : undefined} data-worker={!owner ? agentKey(agent) : undefined} data-selected={selected} data-role={agent.role} aria-pressed={selected} aria-label={`${selected ? "Clear filter for" : "Filter by"} ${displayLabel}, ${agent.role}, ${status}, ${agent.workState}${mailWakePaused ? ", mail auto-wake paused; agent execution is not blocked" : ""}`} title={title}
-    onClick={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })}>
+  return <Card className={styles.agent} style={onSelect ? undefined : { cursor: "default" }} data-owner={owner ? "true" : undefined} data-worker={!owner ? agentKey(agent) : undefined} data-selected={selected} data-static={!onSelect || undefined} data-role={agent.role} aria-pressed={onSelect ? selected : undefined} aria-label={`${onSelect ? selected ? "Clear filter for " : "Filter by " : ""}${projectName ? `${projectName} · ` : ""}${displayLabel}, ${agent.role}, ${status}, ${agent.workState}${mailWakePaused ? ", mail auto-wake paused; agent execution is not blocked" : ""}`} title={onSelect ? title : undefined} onClick={onSelect}>
+    {projectName && <h3 className="mb-2 break-words text-[13px] font-semibold">{projectName}</h3>}
     <span className={styles.cardTop}><span>{agent.role}{context ? " · context" : ""}</span><span className={styles.status} data-live={live} data-error={agent.conflict || agent.workState === "error"}><i />{status}</span></span>
     <strong className={styles.name}>{displayLabel} <code>{agent.instanceId.slice(-6)}</code></strong>
     <span className={styles.model} title={agent.model ? `${agent.model.provider} / ${agent.model.id}` : undefined}>{agent.model?.id ?? "Model unknown"}</span>
@@ -207,5 +217,5 @@ function CompactAgent({ agent, now, unavailable, context, owner, event }: {
     <span className={styles.currentTool} aria-hidden={!tool} title={tool?.name}>{tool && <><span className={styles.currentToolName}>{tool.name}</span><span className={styles.currentToolMeta}>{` · ${elapsedTime(tool.startedAt, live ? now : Date.parse(agent.observedAt))}${agent.currentTools.length > 1 ? ` +${agent.currentTools.length - 1}` : ""}`}</span></>}</span>
     <span className={styles.cardBottom}><span title={agent.projectId ?? undefined}>{agent.projectId ?? "Unlinked project"}</span>{agent.bead && <code>{agent.bead.beadId}</code>}</span>
     {agent.role === "worker" && <span className={styles.event} aria-hidden={!event} title={event ? `${event.kind} · ${event.updatedAt} · observed native projection, not delivery confirmation` : undefined}>{event ? `${event.kind} · ${elapsedTime(event.updatedAt, now)} ago · observed` : ""}</span>}
-  </button>;
+  </Card>;
 }

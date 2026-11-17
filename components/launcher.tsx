@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, FlaskConical, FolderGit2, Loader2 } from "lucide-react";
@@ -34,6 +35,7 @@ export function Launcher() {
             Choose a beads project to view and manage
           </div>
         </div>
+        <Link href="/dashboard" className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-[var(--text-2)] hover:bg-[var(--surface-2)]">Dashboard</Link>
         <button
           onClick={toggle}
           title="Toggle theme"

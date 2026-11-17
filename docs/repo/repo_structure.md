@@ -25,6 +25,7 @@
 - entrypoint: `app/layout.tsx` and `components/providers.tsx` — root layout and browser providers.
 - entrypoint: `app/page.tsx` — project launcher via `components/launcher.tsx`.
 - entrypoint: `app/p/[projectId]/page.tsx` — project page and `components/app-shell.tsx`.
+- entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — project-independent active agents and merged activity with server-side Neuro-gate descriptions.
 - entrypoint: `app/api/` — route handlers; project issue operations live under `app/api/p/[projectId]/`.
 - entrypoint: `proxy.ts` — request guard and viewer-mode request handling.
 - entrypoint: `instrumentation.ts` and `instrumentation-node.ts` — Node runtime startup and shutdown hooks.
@@ -46,7 +47,7 @@
 - zone: `lib/beads-watch.ts` and `lib/sse-registry.ts` own server stream notification/lifecycle; `hooks/use-beads-stream.ts` owns browser invalidation.
 - zone: `lib/agent-watch.ts`, `lib/agent-api.ts`, `app/api/agents/`, and project agent routes own one shared read-only agent projection/stream. `hooks/use-agents.ts` keeps presence/history queries separate from Beads; agent components and `hooks/use-agent-filters.ts` own the browser surface.
 - owner-rule: The existing external `pi_quality_runtime` extension owns identity, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
-- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns AI-assist integration.
+- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns AI-assist integration. `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts` own global activity aggregation, separate settings, and cached Neuro-gate descriptions; they do not own runtime messaging.
 - zone: `lib/update-service.ts`, `lib/self-update.ts`, and `lib/update-types.ts` own update coordination and contracts.
 - zone: `lib/themes.ts`, `components/theme-provider.tsx`, and `app/globals.css` own theme registry, selection, and palettes.
 - zone: `public/` holds static assets; `design/` holds reference exports, not current runtime implementation.
@@ -61,6 +62,7 @@
 - doc: `docs/repo/api-and-beads.md` - HTTP route families, data/error contracts, attachments, and CLI serialization
 - doc: `docs/repo/ui-state.md` - URL navigation, filters, detail trail, preferences, query caches, and themes
 - doc: `docs/repo/agent-workspace.md` - live-agent identity, local runtime protocol, read-only conversations, filters, and activation boundaries
+- doc: `docs/repo/dashboard.md` - global agents/activity, Russian descriptions, centered details, and Neuro-gate settings/cache
 - doc: `docs/repo/operations.md` - local/container launch modes, shutdown, self-update, and optional external integrations
 - doc: `docs/repo/verification.md` - retired test infrastructure, supported checks, and limitations
 

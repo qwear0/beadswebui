@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import { GateApproval } from "@/components/gate-approval";
+import { DialogContent } from "@/components/ui/dialog";
 import { AssigneeField } from "@/components/assignee-field";
 import { DependencyEditor } from "@/components/dependency-editor";
 import { toast } from "sonner";
@@ -126,6 +127,7 @@ export function BeadDetailDrawer({
   onClose,
   initialAction = "view",
   actionNonce = 0,
+  centered = false,
 }: {
   openId: string | null;
   /** True when a trail exists behind the current bead (GH #15). */
@@ -136,6 +138,7 @@ export function BeadDetailDrawer({
   onClose: () => void;
   initialAction?: DetailAction;
   actionNonce?: number;
+  centered?: boolean;
 }) {
   const { index, readOnly } = useApp();
   const bead = openId ? index.get(openId) : undefined;
@@ -150,6 +153,7 @@ export function BeadDetailDrawer({
   // Set by the body while an edit or comment holds unsaved text, so a stray
   // click outside the drawer keeps it; Esc and the Close button still close.
   const dirtyRef = React.useRef(false);
+  const Content = centered ? DialogContent : SheetContent;
   return (
     <Sheet
       open={!!openId && !!bead}
@@ -166,18 +170,18 @@ export function BeadDetailDrawer({
         onClose();
       }}
     >
-      <SheetContent
+      <Content
         data-bead-drawer
         showCloseButton={false}
-        style={{ width, maxWidth: "96vw" }}
-        className="flex gap-0 overflow-hidden border-l border-border bg-[var(--drawer)] p-0"
+        style={{ width: centered ? 900 : width, maxWidth: "96vw" }}
+        className={centered ? "flex h-[90dvh] flex-col gap-0 overflow-hidden rounded-xl border border-border bg-[var(--drawer)] p-0 sm:max-w-none" : "flex gap-0 overflow-hidden border-l border-border bg-[var(--drawer)] p-0"}
       >
-        {/* Left-edge resize handle (drawer is anchored right, so it grows leftward). */}
-        <div
+        {/* The project drawer remains resizable; Dashboard uses a centered modal. */}
+        {!centered && <div
           onPointerDown={startResize}
           title="Drag to resize"
           className="absolute left-0 top-0 z-20 h-full w-1.5 cursor-ew-resize hover:bg-[var(--brand)]/40"
-        />
+        />}
         <div className="bd-scroll min-w-0 flex-1 overflow-y-auto">
           {bead ? (
             <DrawerBody
@@ -194,7 +198,7 @@ export function BeadDetailDrawer({
             <SheetTitle className="sr-only">Bead details</SheetTitle>
           )}
         </div>
-      </SheetContent>
+      </Content>
     </Sheet>
   );
 }

@@ -1,4 +1,6 @@
 import type { Bead, CreateInput, UpdateInput, DepType } from "./schema";
+import type { DashboardActivityResponse, DashboardEventRef, DashboardSettings, DashboardSummaryResponse } from "./dashboard-types";
+import type { AgentMessage, AgentTelemetryError } from "./agent-protocol";
 import type { UpdateStatus, UpdateResult, UpdateChannel, UpdateTarget } from "./update-types";
 import type { AgentsResponse, AgentConversationsResponse, AgentMessagesResponse, AgentPageOptions } from "./agent-protocol";
 export type { AgentsResponse, AgentSnapshot, AgentConversation, AgentMessage, AgentReceipt, AgentConversationsResponse, AgentMessagesResponse, AgentPageOptions } from "./agent-protocol";
@@ -164,6 +166,11 @@ function agentPageQuery(options: AgentPageOptions = {}): string {
 }
 
 export const api = {
+  dashboardActivity: (cursor?: string | null) => request<DashboardActivityResponse>(`/api/dashboard/activity${cursor ? `?cursor=${enc(cursor)}` : ""}`, { cache: "no-store" }),
+  dashboardSettings: () => request<DashboardSettings>("/api/dashboard/settings", { cache: "no-store" }),
+  saveDashboardSettings: (settings: DashboardSettings) => request<DashboardSettings>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  dashboardSummaries: (events: DashboardEventRef[]) => request<DashboardSummaryResponse>("/api/dashboard/summaries", { method: "POST", body: JSON.stringify({ events }) }),
+  dashboardMessage: (id: string) => request<{ message: AgentMessage; errors: AgentTelemetryError[] }>(`/api/dashboard/messages/${enc(id)}`, { cache: "no-store" }),
   agents: (projectId?: string) => request<AgentsResponse>(agentsBase(projectId), { cache: "no-store" }),
   agentConversations: (projectId?: string, options?: AgentPageOptions) =>
     request<AgentConversationsResponse>(`${agentsBase(projectId)}/conversations${agentPageQuery(options)}`, { cache: "no-store" }),

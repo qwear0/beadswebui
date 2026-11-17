@@ -12,6 +12,7 @@
 ## 2. Entry points and key paths
 
 - `app/page.tsx` renders `components/launcher.tsx`; `app/p/[projectId]/page.tsx` renders `components/app-shell.tsx`.
+- `app/dashboard/page.tsx` renders `components/dashboard.tsx` without a selected project. It reuses global presence, existing per-project Activity construction, and sanitized mail; [Dashboard](dashboard.md) owns the separate Neuro-gate description/settings/cache flow.
 - `components/providers.tsx` provides browser query/theme context; `hooks/use-beads.ts` owns issue queries and mutations.
 - `lib/api-client.ts` is the typed browser request surface; `app/api/p/[projectId]/beads/route.ts` is a representative server route.
 - `lib/schema.ts` defines data/input schemas. `lib/api.ts` centralizes API response helpers.
