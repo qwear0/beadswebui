@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useAgentConversations } from "@/hooks/use-agents";
 import { useAgentFilters } from "@/hooks/use-agent-filters";
+import { useProjects } from "@/hooks/use-projects";
 import { agentKey, elapsedTime, matchesAgent } from "@/lib/agent-ui";
 import type { AgentConversation, AgentSnapshot } from "@/lib/agent-protocol";
 import styles from "./agent-topology.module.css";
@@ -34,12 +35,14 @@ function topologyGroups(visible: AgentSnapshot[], agents: AgentSnapshot[]): Grou
 
 function pairKey(a: string, b: string) { return [a, b].sort().join("|"); }
 
-export function AgentTopology({ agents, visible, projectId, now, unavailable, interactive = true, projectNames }: {
+export function AgentTopology({ agents, visible, projectId, now, unavailable, interactive = true }: {
   agents: AgentSnapshot[]; visible: AgentSnapshot[]; projectId?: string; now: number; unavailable: boolean;
-  interactive?: boolean; projectNames?: ReadonlyMap<string, string>;
+  interactive?: boolean;
 }) {
   // Shares the conversation cache/stream; presence never fetches message bodies.
   const history = useAgentConversations(projectId);
+  const projects = useProjects();
+  const projectNames = new Map(projects.data?.projects.map(project => [project.id, project.name]));
   const groups = topologyGroups(visible, agents);
   const events = React.useMemo(() => {
     const latest = new Map<string, AgentConversation>();
@@ -73,10 +76,12 @@ export function AgentTopology({ agents, visible, projectId, now, unavailable, in
 
 function TopologyGroup({ group, events, ready, continuity, now, unavailable, visibleKeys, interactive, projectNames }: {
   group: Group; events: Map<string, AgentConversation>; ready: boolean; continuity: number | null; now: number; unavailable: boolean; visibleKeys: Set<string>;
-  interactive: boolean; projectNames?: ReadonlyMap<string, string>;
+  interactive: boolean; projectNames: ReadonlyMap<string, string>;
 }) {
   const Card = interactive ? CompactAgent : AgentPresenceCard;
-  const projectName = (agent: AgentSnapshot) => projectNames ? projectNames.get(agent.projectId ?? "") ?? agent.projectId ?? "Unlinked project" : undefined;
+  const members = group.owner ? [group.owner, ...group.workers] : group.workers;
+  const projectLabels = [...new Set(members.map(agent => projectNames.get(agent.projectId ?? "") ?? agent.projectId ?? "Unlinked project"))];
+  const label = projectLabels.join(" · ");
   const canvas = React.useRef<HTMLDivElement>(null);
   const [traces, setTraces] = React.useState<Trace[]>([]);
   const previous = React.useRef<{ since: number; latest: Map<string, string> } | null>(null);
@@ -164,8 +169,8 @@ function TopologyGroup({ group, events, ready, continuity, now, unavailable, vis
     previous.current = { since, latest: next };
   }, [events, ready, continuity, uncertain, ownerKey, traces, group.workers]);
 
-  return <article className={styles.group} aria-label={`Agent group: ${group.label}`}>
-    <header className={styles.groupHeading}><strong>{group.label}</strong><span>{group.workers.length} {group.owner ? (group.workers.length === 1 ? "worker" : "workers") : (group.workers.length === 1 ? "unattached agent" : "unattached agents")}{uncertain && group.owner ? " · last observed / uncertain" : ""}</span></header>
+  return <article className={styles.group} aria-label={`Agent group: ${label}`}>
+    <header className={styles.groupHeading}><strong>{label}</strong><span>{members.length} {members.length === 1 ? "agent" : "agents"}{uncertain && group.owner ? " · last observed / uncertain" : ""}</span></header>
     <div className={styles.scroll}>
       <div className={styles.canvas} ref={canvas}>
         <svg className={styles.connections} aria-hidden="true">
@@ -175,10 +180,10 @@ function TopologyGroup({ group, events, ready, continuity, now, unavailable, vis
           </g>)}
         </svg>
         <div className={styles.owner}>
-          {group.owner ? <Card agent={group.owner} now={now} unavailable={unavailable} context={!visibleKeys.has(agentKey(group.owner)) || group.owner.liveness !== "online"} owner projectName={projectName(group.owner)} /> : <div className={styles.missing}><span>NO CONFIRMED COORDINATOR</span><p>{group.label}</p><small>Ownership is not inferred from labels or working directories.</small></div>}
+          {group.owner ? <Card agent={group.owner} now={now} unavailable={unavailable} context={!visibleKeys.has(agentKey(group.owner)) || group.owner.liveness !== "online"} owner /> : <div className={styles.missing}><span>NO CONFIRMED COORDINATOR</span><p>{group.label}</p><small>Ownership is not inferred from labels or working directories.</small></div>}
         </div>
         <div className={styles.workers}>
-          {group.workers.map(worker => <Card key={agentKey(worker)} agent={worker} now={now} unavailable={unavailable} event={ownerKey ? events.get(pairKey(ownerKey, agentKey(worker))) : undefined} projectName={projectName(worker)} />)}
+          {group.workers.map(worker => <Card key={agentKey(worker)} agent={worker} now={now} unavailable={unavailable} event={ownerKey ? events.get(pairKey(ownerKey, agentKey(worker))) : undefined} />)}
         </div>
       </div>
     </div>
@@ -189,19 +194,19 @@ function workerDisplayLabel(agent: AgentSnapshot): string {
   return agent.role === "worker" && agent.label === "Pi session" ? "Worker (role unknown)" : agent.label;
 }
 
-function CompactAgent({ agent, now, unavailable, context, owner, event, projectName }: {
-  agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation; projectName?: string;
+function CompactAgent({ agent, now, unavailable, context, owner, event }: {
+  agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation;
 }) {
   const { filters, setFilters } = useAgentFilters();
   const selected = !!filters.agentId && matchesAgent(agent, filters);
-  return <AgentPresenceCard agent={agent} now={now} unavailable={unavailable} context={context} owner={owner} event={event} selected={selected} projectName={projectName}
+  return <AgentPresenceCard agent={agent} now={now} unavailable={unavailable} context={context} owner={owner} event={event} selected={selected}
     onSelect={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })} />;
 }
 
 /** Shared card presentation; the global dashboard deliberately has no action. */
-export function AgentPresenceCard({ agent, now, unavailable, context, owner, event, selected = false, onSelect, projectName }: {
+export function AgentPresenceCard({ agent, now, unavailable, context, owner, event, selected = false, onSelect }: {
   agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation;
-  selected?: boolean; onSelect?: () => void; projectName?: string;
+  selected?: boolean; onSelect?: () => void;
 }) {
   const Card = onSelect ? "button" : "article";
   const live = !unavailable && agent.liveness === "online" && !agent.conflict;
@@ -211,8 +216,7 @@ export function AgentPresenceCard({ agent, now, unavailable, context, owner, eve
   const displayLabel = workerDisplayLabel(agent);
   const summary = agent.summary ?? "";
   const title = `${displayLabel}\n${agentKey(agent)}${summary ? `\n${summary}` : ""}`;
-  return <Card className={styles.agent} style={onSelect ? undefined : { cursor: "default" }} data-owner={owner ? "true" : undefined} data-worker={!owner ? agentKey(agent) : undefined} data-selected={selected} data-static={!onSelect || undefined} data-role={agent.role} aria-pressed={onSelect ? selected : undefined} aria-label={`${onSelect ? selected ? "Clear filter for " : "Filter by " : ""}${projectName ? `${projectName} · ` : ""}${displayLabel}, ${agent.role}, ${status}, ${agent.workState}${mailWakePaused ? ", mail auto-wake paused; agent execution is not blocked" : ""}`} title={onSelect ? title : undefined} onClick={onSelect}>
-    {projectName && <h3 className="mb-2 break-words text-[13px] font-semibold">{projectName}</h3>}
+  return <Card className={styles.agent} style={onSelect ? undefined : { cursor: "default" }} data-owner={owner ? "true" : undefined} data-worker={!owner ? agentKey(agent) : undefined} data-selected={selected} data-static={!onSelect || undefined} data-role={agent.role} aria-pressed={onSelect ? selected : undefined} aria-label={`${onSelect ? selected ? "Clear filter for " : "Filter by " : ""}${displayLabel}, ${agent.role}, ${status}, ${agent.workState}${mailWakePaused ? ", mail auto-wake paused; agent execution is not blocked" : ""}`} title={onSelect ? title : undefined} onClick={onSelect}>
     <span className={styles.cardTop}><span>{agent.role}{context ? " · context" : ""}</span><span className={styles.status} data-live={live} data-error={agent.conflict || agent.workState === "error"}><i />{status}</span></span>
     <strong className={styles.name}>{displayLabel} <code>{agent.instanceId.slice(-6)}</code></strong>
     <span className={styles.model} title={agent.model ? `${agent.model.provider} / ${agent.model.id}` : undefined}>{agent.model?.id ?? "Model unknown"}</span>

@@ -11,7 +11,7 @@
 ## 2. Entry points and key paths
 
 - entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — global agent topology and right-hand activity feed; launcher/sidebar links open this route.
-- code: `components/agent-topology.tsx` — shared `AgentTopology` and `AgentPresenceCard`, reused from project Agents with the same horizontal coordinator/worker layout, ownership links and observed-message signals. Dashboard disables card selection/filtering and renders non-interactive articles with project display names.
+- code: `components/agent-topology.tsx` — shared `AgentTopology` and `AgentPresenceCard`, reused from project Agents with the same horizontal coordinator/worker layout, ownership links and observed-message signals. Both views show project display names in group headers rather than individual card headings, and count all displayed agents including the coordinator. Dashboard disables card selection/filtering and renders non-interactive articles.
 - code: `components/dashboard-event-detail.tsx` — centered read-only issue details and exact-message details, reusing `components/bead-detail-drawer.tsx` and `components/agent-conversation.tsx`.
 - code: `components/dashboard-settings.tsx`, `hooks/use-dashboard.ts`, and `lib/api-client.ts` — settings modal and browser queries.
 - code: `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, `lib/dashboard-summaries.ts`, and `lib/dashboard-types.ts` — aggregation, durable settings, inference/cache, and shared DTO/default prompt.

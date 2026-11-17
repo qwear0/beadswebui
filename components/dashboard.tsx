@@ -5,7 +5,6 @@ import { Loader2, Settings } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { avatarColor, initials, relTime } from "@/lib/beads-view";
 import { useAgents } from "@/hooks/use-agents";
-import { useProjects } from "@/hooks/use-projects";
 import { useDashboardActivity, useDashboardSettings } from "@/hooks/use-dashboard";
 import { AgentTopology } from "@/components/agent-topology";
 import { DashboardSettingsDialog } from "@/components/dashboard-settings";
@@ -14,7 +13,6 @@ import { compareDashboardEvents, type DashboardEvent, type DashboardEventRef, ty
 
 export function Dashboard() {
   const agents = useAgents();
-  const projects = useProjects();
   const settings = useDashboardSettings();
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<DashboardEvent | null>(null);
@@ -23,7 +21,6 @@ export function Dashboard() {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const names = new Map(projects.data?.projects.map(project => [project.id, project.name]));
   const observedNow = now || Date.parse(agents.data?.observedAt ?? "");
   const active = (agents.data?.agents ?? []).filter(agent => agent.liveness === "online" && observedNow - Date.parse(agent.observedAt) <= 45_000);
   const unavailable = !!agents.error || agents.data?.availability === "unavailable";
@@ -34,7 +31,7 @@ export function Dashboard() {
       {agents.isLoading && <Loader2 className="animate-spin text-muted-foreground" aria-label="Загрузка агентов" size={18} />}
       {unavailable && <p role="alert" className="mb-3 text-sm text-destructive">Данные агентов недоступны.{agents.error ? ` ${agents.error.message}` : ""}</p>}
       {!unavailable && partialPresence && <p role="alert" className="mb-3 text-sm text-destructive">Часть сведений об агентах недоступна.</p>}
-      {agents.data && <AgentTopology agents={active} visible={active} now={observedNow} unavailable={unavailable} interactive={false} projectNames={names} />}
+      {agents.data && <AgentTopology agents={active} visible={active} now={observedNow} unavailable={unavailable} interactive={false} />}
     </section>
     <aside aria-label="Активность всех проектов" className="flex min-h-0 h-1/2 flex-col border-t border-border bg-[var(--surface)] lg:h-full lg:w-[420px] lg:shrink-0 lg:border-l lg:border-t-0 xl:w-[460px]">
       <div className="h-14 shrink-0" aria-hidden="true" />
