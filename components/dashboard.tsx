@@ -3,12 +3,11 @@ import * as React from "react";
 import { useQueries } from "@tanstack/react-query";
 import { Loader2, Settings } from "lucide-react";
 import { api } from "@/lib/api-client";
-import { agentKey } from "@/lib/agent-ui";
 import { avatarColor, initials, relTime } from "@/lib/beads-view";
 import { useAgents } from "@/hooks/use-agents";
 import { useProjects } from "@/hooks/use-projects";
 import { useDashboardActivity, useDashboardSettings } from "@/hooks/use-dashboard";
-import { AgentPresenceCard } from "@/components/agent-topology";
+import { AgentTopology } from "@/components/agent-topology";
 import { DashboardSettingsDialog } from "@/components/dashboard-settings";
 import { DashboardEventDetail } from "@/components/dashboard-event-detail";
 import { compareDashboardEvents, type DashboardEvent, type DashboardEventRef, type DashboardSettings } from "@/lib/dashboard-types";
@@ -35,7 +34,7 @@ export function Dashboard() {
       {agents.isLoading && <Loader2 className="animate-spin text-muted-foreground" aria-label="Загрузка агентов" size={18} />}
       {unavailable && <p role="alert" className="mb-3 text-sm text-destructive">Данные агентов недоступны.{agents.error ? ` ${agents.error.message}` : ""}</p>}
       {!unavailable && partialPresence && <p role="alert" className="mb-3 text-sm text-destructive">Часть сведений об агентах недоступна.</p>}
-      <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{active.map(agent => <AgentPresenceCard key={agentKey(agent)} agent={agent} now={observedNow} unavailable={unavailable} projectName={names.get(agent.projectId ?? "") ?? agent.projectId ?? ""} />)}</div>
+      {agents.data && <AgentTopology agents={active} visible={active} now={observedNow} unavailable={unavailable} interactive={false} projectNames={names} />}
     </section>
     <aside aria-label="Активность всех проектов" className="flex min-h-0 h-1/2 flex-col border-t border-border bg-[var(--surface)] lg:h-full lg:w-[420px] lg:shrink-0 lg:border-l lg:border-t-0 xl:w-[460px]">
       <div className="h-14 shrink-0" aria-hidden="true" />

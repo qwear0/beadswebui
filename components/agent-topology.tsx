@@ -34,8 +34,9 @@ function topologyGroups(visible: AgentSnapshot[], agents: AgentSnapshot[]): Grou
 
 function pairKey(a: string, b: string) { return [a, b].sort().join("|"); }
 
-export function AgentTopology({ agents, visible, projectId, now, unavailable }: {
+export function AgentTopology({ agents, visible, projectId, now, unavailable, interactive = true, projectNames }: {
   agents: AgentSnapshot[]; visible: AgentSnapshot[]; projectId?: string; now: number; unavailable: boolean;
+  interactive?: boolean; projectNames?: ReadonlyMap<string, string>;
 }) {
   // Shares the conversation cache/stream; presence never fetches message bodies.
   const history = useAgentConversations(projectId);
@@ -58,21 +59,24 @@ export function AgentTopology({ agents, visible, projectId, now, unavailable }: 
   return <section className={styles.topology} aria-label="Active agent topology">
     <div className={styles.heading}>
       <div><h2>{unavailable ? "Last observed topology" : "Active agent topology"}</h2><p>Coordinator → workers · exact runtime ownership</p></div>
-      <span>{groups.length} {groups.length === 1 ? "group" : "groups"} · {visible.filter(agent => agent.liveness === "online").length} {unavailable ? "last observed online" : "online in filter"}</span>
+      <span>{groups.length} {groups.length === 1 ? "group" : "groups"} · {visible.filter(agent => agent.liveness === "online").length} {unavailable ? "last observed online" : interactive ? "online in filter" : "online"}</span>
     </div>
-    {!groups.length && <p className={styles.empty}>{unavailable ? "No last-observed online instances available." : "No online agents match the selected scope and filters."} Stale and ended instances remain in the fleet below.</p>}
-    {groups.map(group => <TopologyGroup key={group.key} group={group} events={events} ready={ready} continuity={history.streamContinuity} now={now} unavailable={unavailable} visibleKeys={visibleKeys} />)}
+    {!groups.length && <p className={styles.empty}>{unavailable ? "No last-observed online instances available." : interactive ? "No online agents match the selected scope and filters." : "No active runtime agents observed."}{interactive && " Stale and ended instances remain in the fleet below."}</p>}
+    {groups.map(group => <TopologyGroup key={group.key} group={group} events={events} ready={ready} continuity={history.streamContinuity} now={now} unavailable={unavailable} visibleKeys={visibleKeys} interactive={interactive} projectNames={projectNames} />)}
     <div className={styles.legend}>
       <span><i /> Confirmed ownership</span><span><i className={styles.uncertainKey} /> Last observed / conflict</span><span><i className={styles.signalKey} /> New observed message</span>
       <span>{historyUnavailable ? "Message activity unavailable" : history.isLoading ? "Loading message activity…" : "Latest loaded native messages · not delivery / ACK confirmation"}</span>
-      <span>Heartbeat ≠ message · select a card to filter</span>
+      <span>Heartbeat ≠ message{interactive && " · select a card to filter"}</span>
     </div>
   </section>;
 }
 
-function TopologyGroup({ group, events, ready, continuity, now, unavailable, visibleKeys }: {
+function TopologyGroup({ group, events, ready, continuity, now, unavailable, visibleKeys, interactive, projectNames }: {
   group: Group; events: Map<string, AgentConversation>; ready: boolean; continuity: number | null; now: number; unavailable: boolean; visibleKeys: Set<string>;
+  interactive: boolean; projectNames?: ReadonlyMap<string, string>;
 }) {
+  const Card = interactive ? CompactAgent : AgentPresenceCard;
+  const projectName = (agent: AgentSnapshot) => projectNames ? projectNames.get(agent.projectId ?? "") ?? agent.projectId ?? "Unlinked project" : undefined;
   const canvas = React.useRef<HTMLDivElement>(null);
   const [traces, setTraces] = React.useState<Trace[]>([]);
   const previous = React.useRef<{ since: number; latest: Map<string, string> } | null>(null);
@@ -171,10 +175,10 @@ function TopologyGroup({ group, events, ready, continuity, now, unavailable, vis
           </g>)}
         </svg>
         <div className={styles.owner}>
-          {group.owner ? <CompactAgent agent={group.owner} now={now} unavailable={unavailable} context={!visibleKeys.has(agentKey(group.owner)) || group.owner.liveness !== "online"} owner /> : <div className={styles.missing}><span>NO CONFIRMED COORDINATOR</span><p>{group.label}</p><small>Ownership is not inferred from labels or working directories.</small></div>}
+          {group.owner ? <Card agent={group.owner} now={now} unavailable={unavailable} context={!visibleKeys.has(agentKey(group.owner)) || group.owner.liveness !== "online"} owner projectName={projectName(group.owner)} /> : <div className={styles.missing}><span>NO CONFIRMED COORDINATOR</span><p>{group.label}</p><small>Ownership is not inferred from labels or working directories.</small></div>}
         </div>
         <div className={styles.workers}>
-          {group.workers.map(worker => <CompactAgent key={agentKey(worker)} agent={worker} now={now} unavailable={unavailable} event={ownerKey ? events.get(pairKey(ownerKey, agentKey(worker))) : undefined} />)}
+          {group.workers.map(worker => <Card key={agentKey(worker)} agent={worker} now={now} unavailable={unavailable} event={ownerKey ? events.get(pairKey(ownerKey, agentKey(worker))) : undefined} projectName={projectName(worker)} />)}
         </div>
       </div>
     </div>
@@ -185,12 +189,12 @@ function workerDisplayLabel(agent: AgentSnapshot): string {
   return agent.role === "worker" && agent.label === "Pi session" ? "Worker (role unknown)" : agent.label;
 }
 
-function CompactAgent({ agent, now, unavailable, context, owner, event }: {
-  agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation;
+function CompactAgent({ agent, now, unavailable, context, owner, event, projectName }: {
+  agent: AgentSnapshot; now: number; unavailable: boolean; context?: boolean; owner?: boolean; event?: AgentConversation; projectName?: string;
 }) {
   const { filters, setFilters } = useAgentFilters();
   const selected = !!filters.agentId && matchesAgent(agent, filters);
-  return <AgentPresenceCard agent={agent} now={now} unavailable={unavailable} context={context} owner={owner} event={event} selected={selected}
+  return <AgentPresenceCard agent={agent} now={now} unavailable={unavailable} context={context} owner={owner} event={event} selected={selected} projectName={projectName}
     onSelect={() => setFilters({ agentId: selected ? null : agent.agentId, instanceId: selected ? null : agent.instanceId })} />;
 }
 

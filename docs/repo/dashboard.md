@@ -10,8 +10,8 @@
 
 ## 2. Entry points and key paths
 
-- entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — standalone agent cards and right-hand activity feed; launcher/sidebar links open this route.
-- code: `components/agent-topology.tsx` — shared `AgentPresenceCard`; Dashboard renders it as a non-interactive article with the project display name.
+- entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — global agent topology and right-hand activity feed; launcher/sidebar links open this route.
+- code: `components/agent-topology.tsx` — shared `AgentTopology` and `AgentPresenceCard`, reused from project Agents with the same horizontal coordinator/worker layout, ownership links and observed-message signals. Dashboard disables card selection/filtering and renders non-interactive articles with project display names.
 - code: `components/dashboard-event-detail.tsx` — centered read-only issue details and exact-message details, reusing `components/bead-detail-drawer.tsx` and `components/agent-conversation.tsx`.
 - code: `components/dashboard-settings.tsx`, `hooks/use-dashboard.ts`, and `lib/api-client.ts` — settings modal and browser queries.
 - code: `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, `lib/dashboard-summaries.ts`, and `lib/dashboard-types.ts` — aggregation, durable settings, inference/cache, and shared DTO/default prompt.
@@ -19,7 +19,7 @@
 
 ## 3. Main flow
 
-1. Dashboard subscribes to the existing global agent snapshot/stream. Only fresh online instances appear; a heartbeat does not query Beads or generate descriptions.
+1. Dashboard subscribes to the existing global agent snapshot/stream. Only fresh online instances appear in its shared topology; unavailable owners remain explicitly unconfirmed rather than being inferred. The topology reuses the global conversation-summary cache/stream for native-message indicators without per-card history/body requests; a heartbeat does not query Beads, refetch messages, or generate descriptions.
 2. The activity request reuses `buildActivity` and the existing store for each registered real project, retaining the same newest 150 issue events per project as Activity. Collection reads share a 15-second promise cache; project failures remain visible instead of becoming sample data. Registration is validated without resolving every checkout; a missing repository does not suppress healthy projects' issue events or descriptions. Mail retains strict canonical-path attribution and reports its unavailability separately.
 3. Sanitized coordinator mail and native owner-worker projections are merged newest-first by canonical message ID, without per-card receipt scans. Each page reads at most 100 messages within the existing bounded history scan. Its cursor binds registration, a fixed high-water boundary, and descending order, separately from existing conversation cursors.
 4. The browser polls activity every 20 seconds; global history revision signals also invalidate it. Scroll loads older message pages and reveals additional cards. Issue and message IDs are deduplicated before sorting. Sorting (including the per-project 150-event cutoff) and mail backfill compare parsed instants, not timestamp strings; equal instants use descending event ID as a deterministic tie-break.
