@@ -22,7 +22,8 @@
 3. The browser submits observed event references (key and ID), never source prose. The server re-resolves authoritative source data, verifies current registration and content identity, checks durable queue status, and reads compatible legacy cache entries only.
 4. Durable admission is disabled unless `SCOTTY_DASHBOARD_DURABLE_ADMISSION=1` and a valid private worker token is configured. HTTP 202 denotes durable acceptance. Once enabled, the private executor receives opaque invitations; the app authenticates it, resolves sources for claims, and validates a claim again before returning resolved content. Completion is lease/token checked by SQLite. No raw app payload, credentials, or database is to be mounted into the control plane.
 5. Worker claim deadline is nominally 180 seconds with a 30-second lease margin. Source resolution has a separate deadline-aware request budget of up to 60 seconds and reserves at least 60 seconds of the claim for inference; other worker control requests retain a 10-second cap. Timeout/lost completion is not an exact-once billing guarantee. Admission-off/capacity refusals are not accepted work; the UI must not suggest otherwise.
-6. Clicking issue/mail opens centrally in read-only details; this does not select another project or record a runtime tool-read receipt. AI Assist remains the separate existing Claude CLI flow and is unaffected by summary worker admission.
+6. Activity cards show the generated description or event title. Only errors and applicable recovery actions appear alongside the event; progress, retry countdowns, and route/model labels are hidden.
+7. Clicking issue/mail opens centrally in read-only details; this does not select another project or record a runtime tool-read receipt. AI Assist remains the separate existing Claude CLI flow and is unaffected by summary worker admission.
 
 ## 4. Contracts and persistence
 

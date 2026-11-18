@@ -32,7 +32,6 @@ export interface DashboardSummaryView {
   checking: boolean;
   error?: string;
   rechecking?: boolean;
-  note?: string;
   uncertain?: boolean;
 }
 type AdmissionJob = { entry: DashboardSummaryAdmitEntry; revision: number };
@@ -57,7 +56,6 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [rechecking, setRechecking] = useState<Record<string, boolean>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
   const [uncertain, setUncertain] = useState<Record<string, boolean>>({});
   const currentEntries = useRef(entries);
   const currentStored = useRef(stored);
@@ -386,14 +384,12 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
     const scope: DashboardSummaryScope | undefined = item.scope ?? (item.reason === "route_blocked" ? "route" : item.reason === "shared_blocked" ? "shared" : undefined);
     if (!scope || (scope === "route" && !item.route)) return;
     setRechecking(current => ({ ...current, [identity]: true }));
-    setNotes(current => ({ ...current, [identity]: "" }));
     try {
       const response = await api.dashboardSummaryRecheck(scope, scope === "route" ? item.route : undefined);
       if (response.ok !== true) throw new Error("Dashboard recheck was not confirmed");
-      if (mounted.current) setNotes(current => ({ ...current, [identity]: "Проверка запрошена; карточка не отправлялась повторно." }));
       await readStatuses([ref], currentRevision.current, false);
     } catch {
-      if (mounted.current) setNotes(current => ({ ...current, [identity]: IDLE_REQUEST_ERROR }));
+      if (mounted.current) setErrors(current => ({ ...current, [identity]: "Не удалось запросить повторную проверку доступности." }));
     } finally {
       if (mounted.current) setRechecking(current => ({ ...current, [identity]: false }));
     }
@@ -408,7 +404,6 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
       checking: !!checking[identity],
       ...(errors[identity] ? { error: errors[identity] } : {}),
       ...(rechecking[identity] ? { rechecking: true } : {}),
-      ...(notes[identity] ? { note: notes[identity] } : {}),
       ...(uncertain[identity] ? { uncertain: true } : {}),
     };
   }

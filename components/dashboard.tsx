@@ -53,36 +53,30 @@ export function Dashboard() {
   </main>;
 }
 
-function dashboardReasonText(reason: DashboardSummaryItem["reason"]): string | undefined {
-  switch (reason) {
+function dashboardSummaryErrorText(item: DashboardSummaryItem | undefined): string | undefined {
+  if (!item || item.reason === "not_found" || item.reason === "source_retry") return;
+  switch (item.state) {
+    case "waiting":
+    case "running":
+    case "retrying": return;
+    case "done": return item.text ? undefined : "Обработчик не вернул текст описания.";
+  }
+  switch (item.reason) {
     case "capacity": return "Очередь временно заполнена; запрос не принят.";
     case "storage_unavailable": return "Не удалось сохранить состояние обработки.";
     case "executor_unavailable": return "Исполнитель описаний сейчас недоступен.";
     case "source_unavailable": return "Исходное событие пока недоступно.";
     case "source_obsolete": return "Источник события изменился или устарел.";
-    case "route_blocked": return "Маршрут модели заблокирован или не имеет доступа. Исправьте настройки и перепроверьте маршрут.";
-    case "shared_blocked": return "Общий маршрут заблокирован. Исправьте настройки и перепроверьте его.";
+    case "route_blocked": return "Нет доступа к модели. Проверьте настройки.";
+    case "shared_blocked": return "Доступ к общему исполнителю заблокирован. Проверьте настройки.";
     case "malformed": return "Запрос отклонён из-за неверного формата.";
     case "invalid": return "Параметры запроса недопустимы.";
-    case "not_found": return "Для события ещё нет принятого задания.";
-    case "source_retry": return "Источник временно не готов; повторите проверку позже.";
-    default: return reason ? "Обработчик вернул неизвестную причину отказа; проверьте настройки маршрута." : undefined;
   }
-}
-
-function dashboardSummaryStateText(item: DashboardSummaryItem | undefined, checking: boolean, now: number): string {
-  if (!item) return checking ? "Проверяем сохранённое состояние…" : "Описание будет запрошено, когда карточка приблизится к области просмотра.";
-  const retrySeconds = Math.max(0, Math.ceil(((item.retryAt ?? 0) - now) / 1000));
-  if (retrySeconds > 0) return `Повтор запланирован через ${retrySeconds} с.`;
   switch (item.state) {
-    case "waiting": return "Задание принято и ожидает обработки.";
-    case "running": return "Описание сейчас создаётся.";
-    case "retrying": return "Повторная попытка ожидает запуска.";
-    case "blocked": return "Задание сохранено, но заблокировано до исправления или проверки.";
-    case "done": return item.text ? "Описание готово." : "Обработчик отметил готовность, но не вернул текст описания.";
-    case "obsolete": return "Задание устарело; описание не показывается.";
+    case "blocked": return "Обработка заблокирована. Проверьте настройки.";
+    case "obsolete": return "Задание устарело; описание недоступно.";
     case "failed": return "Обработка завершилась с ошибкой.";
-    case "not_accepted": return "Запрос не принят; новая генерация не запущена.";
+    case "not_accepted": return "Запрос на создание описания не принят.";
   }
 }
 
@@ -170,9 +164,8 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
       const description = descriptions[dashboardSummaryIdentity(ref)];
       const status = description?.item;
       const summary = status?.state === "done" ? status.text : undefined;
-      const retrySeconds = Math.max(0, Math.ceil(((status?.retryAt ?? 0) - now) / 1000));
-      const reason = dashboardReasonText(status?.reason);
-      const canReplay = !description?.uncertain && !!status?.replayable && !(status.state === "not_accepted" && status.reason === "capacity") && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
+      const summaryError = dashboardSummaryErrorText(status);
+      const canReplay = !description?.uncertain && !!status?.replayable && !(status.state === "not_accepted" && status.reason === "capacity") && ["failed", "obsolete", "not_accepted"].includes(status.state) && (status.retryAt ?? 0) <= now;
       const recheckScope = status?.scope ?? (status?.reason === "route_blocked" ? "route" : status?.reason === "shared_blocked" ? "shared" : undefined);
       const canRecheck = status?.state === "blocked" && (recheckScope === "shared" || (recheckScope === "route" && !!status.route));
       return <li key={item.id} data-event-key={item.key} data-event-id={item.id}>
@@ -180,21 +173,16 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
         <span aria-hidden="true" className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white" style={{ background: avatarColor(item.actor) }}>{initials(item.actor)}</span>
         <span className="min-w-0 flex-1">
           <span className="mb-1 flex items-start justify-between gap-2"><span className="break-words text-[11px] font-semibold text-[var(--text-2)] [overflow-wrap:anywhere]">{item.source === "message" ? `${item.senderName} → ${item.recipientName}` : item.projectName}</span><time dateTime={item.at} className="shrink-0 text-[10px] text-[var(--text-3)]">{relTime(item.at)}</time></span>
-          {summary ? <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{summary}</span> : <>
-            <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{item.title}</span>
-            <span className="mt-1 block text-xs text-muted-foreground" role="status">{dashboardSummaryStateText(status, !!description?.checking, now)}</span>
-            {reason && <span className="mt-1 block text-xs text-destructive">{reason}</span>}
-            {description?.error && <span role="alert" className="mt-1 block text-xs text-destructive">{description.error}</span>}
-            {description?.note && <span role="status" className="mt-1 block text-xs text-muted-foreground">{description.note}</span>}
-          </>}
-          {status && (status.route || status.model || status.scope) && <span className="mt-1 block text-[11px] text-muted-foreground">{status.route ? `Маршрут: ${status.route}` : status.scope === "shared" ? "Маршрут: общий" : "Маршрут: scoped"}{status.model ? ` · Модель: ${status.model}` : ""}</span>}
+          <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{summary || item.title}</span>
+          {summaryError && <span role="alert" className="mt-1 block text-xs text-destructive">{summaryError}</span>}
+          {description?.error && <span role="alert" className="mt-1 block text-xs text-destructive">{description.error}</span>}
         </span>
       </button>
-      {!summary && (description?.error || description?.uncertain) && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description.checking ? "Проверка…" : "Проверить состояние"}</button>}
-      {!summary && description?.uncertain && <span role="status" className="mt-1 block text-xs text-destructive">Результат повтора не подтверждён. Автоматическая повторная отправка отключена; проверьте состояние.</span>}
-      {!summary && !description?.uncertain && status?.state === "not_accepted" && status.reason === "capacity" && <button type="button" disabled={description?.checking} onClick={() => retryAdmission(ref, status)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Отправка…" : "Повторить запрос в очередь"}</button>}
-      {!summary && canReplay && <button type="button" disabled={description?.checking} onClick={() => retry(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Повтор…" : "Повторить обработку"}</button>}
-      {!summary && canRecheck && <button type="button" disabled={description?.rechecking} onClick={() => recheck(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.rechecking ? "Проверка…" : `Перепроверить ${recheckScope === "route" ? "маршрут" : "общий исполнитель"}`}</button>}
+      {description?.uncertain && <span role="alert" className="mt-1 block text-xs text-destructive">Результат повтора не подтверждён. Автоматическая повторная отправка отключена; проверьте состояние.</span>}
+      {(description?.error || description?.uncertain) && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">Проверить состояние</button>}
+      {!description?.uncertain && status?.state === "not_accepted" && status.reason === "capacity" && <button type="button" disabled={description?.checking} onClick={() => retryAdmission(ref, status)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">Повторить запрос в очередь</button>}
+      {canReplay && <button type="button" disabled={description?.checking} onClick={() => retry(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">Повторить обработку</button>}
+      {canRecheck && <button type="button" disabled={description?.rechecking} onClick={() => recheck(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">Перепроверить доступность</button>}
     </li>;
     })}</ol>
     <div ref={sentinel} className="flex h-8 justify-center p-2">{query.isFetching && <Loader2 size={16} className="animate-spin text-muted-foreground" aria-label="Загрузка событий" />}</div>
