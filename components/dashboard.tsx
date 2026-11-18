@@ -8,7 +8,7 @@ import { useDashboardActivity, useDashboardSettings, useDashboardSummaries } fro
 import { AgentTopology } from "@/components/agent-topology";
 import { DashboardSettingsDialog } from "@/components/dashboard-settings";
 import { DashboardEventDetail } from "@/components/dashboard-event-detail";
-import { compareDashboardEvents, type DashboardEvent, type DashboardEventRef } from "@/lib/dashboard-types";
+import { compareDashboardEvents, dashboardSummaryIdentity, type DashboardEvent, type DashboardEventRef, type DashboardSummaryItem } from "@/lib/dashboard-types";
 
 export function Dashboard() {
   const agents = useAgents();
@@ -53,30 +53,68 @@ export function Dashboard() {
   </main>;
 }
 
+function dashboardReasonText(reason: DashboardSummaryItem["reason"]): string | undefined {
+  switch (reason) {
+    case "capacity": return "Очередь временно заполнена; запрос не принят.";
+    case "storage_unavailable": return "Не удалось сохранить состояние обработки.";
+    case "executor_unavailable": return "Исполнитель описаний сейчас недоступен.";
+    case "source_unavailable": return "Исходное событие пока недоступно.";
+    case "source_obsolete": return "Источник события изменился или устарел.";
+    case "route_blocked": return "Маршрут модели заблокирован или не имеет доступа. Исправьте настройки и перепроверьте маршрут.";
+    case "shared_blocked": return "Общий маршрут заблокирован. Исправьте настройки и перепроверьте его.";
+    case "malformed": return "Запрос отклонён из-за неверного формата.";
+    case "invalid": return "Параметры запроса недопустимы.";
+    case "not_found": return "Для события ещё нет принятого задания.";
+    case "source_retry": return "Источник временно не готов; повторите проверку позже.";
+    default: return reason ? "Обработчик вернул неизвестную причину отказа; проверьте настройки маршрута." : undefined;
+  }
+}
+
+function dashboardSummaryStateText(item: DashboardSummaryItem | undefined, checking: boolean, now: number): string {
+  if (!item) return checking ? "Проверяем сохранённое состояние…" : "Описание будет запрошено, когда карточка приблизится к области просмотра.";
+  const retrySeconds = Math.max(0, Math.ceil(((item.retryAt ?? 0) - now) / 1000));
+  if (retrySeconds > 0) return `Повтор запланирован через ${retrySeconds} с.`;
+  switch (item.state) {
+    case "waiting": return "Задание принято и ожидает обработки.";
+    case "running": return "Описание сейчас создаётся.";
+    case "retrying": return "Повторная попытка ожидает запуска.";
+    case "blocked": return "Задание сохранено, но заблокировано до исправления или проверки.";
+    case "done": return item.text ? "Описание готово." : "Обработчик отметил готовность, но не вернул текст описания.";
+    case "obsolete": return "Задание устарело; описание не показывается.";
+    case "failed": return "Обработка завершилась с ошибкой.";
+    case "not_accepted": return "Запрос не принят; новая генерация не запущена.";
+  }
+}
+
 function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: DashboardEvent) => void }) {
   const query = useDashboardActivity();
   const root = React.useRef<HTMLDivElement>(null);
   const sentinel = React.useRef<HTMLDivElement>(null);
   const [limit, setLimit] = React.useState(40);
-  const [nearViewport, setNearViewport] = React.useState<DashboardEventRef[]>([]);
+  const [nearViewport, setNearViewport] = React.useState<{ ref: DashboardEventRef; priority: "visible" | "prefetch" }[]>([]);
   const byId = new Map<string, DashboardEvent>();
   for (const page of query.data?.pages ?? []) for (const item of page.items) if (!byId.has(item.id)) byId.set(item.id, item);
   const items = [...byId.values()].sort(compareDashboardEvents);
   const displayed = items.slice(0, limit);
-  const signature = displayed.map(item => item.key).join("/");
-  const nearbyKeys = new Set(nearViewport.map(event => event.key));
-  const { descriptions, retry } = useDashboardSummaries(displayed.filter(item => nearbyKeys.has(item.key)));
+  const signature = displayed.map(item => `${item.key}:${item.id}`).join("/");
+  const { descriptions, checkStatus, retry, recheck } = useDashboardSummaries(nearViewport, query.dataUpdatedAt);
 
   React.useEffect(() => {
-    const nearby = new Map<string, DashboardEventRef>();
+    const nearby = new Map<string, { ref: DashboardEventRef; priority: "visible" | "prefetch" }>();
     const observer = new IntersectionObserver(entries => {
       for (const entry of entries) {
         const data = (entry.target as HTMLElement).dataset;
-        if (entry.isIntersecting) nearby.set(data.eventKey!, { key: data.eventKey!, id: data.eventId! });
-        else nearby.delete(data.eventKey!);
+        const ref = { key: data.eventKey!, id: data.eventId! };
+        const identity = dashboardSummaryIdentity(ref);
+        if (entry.isIntersecting) {
+          const viewport = root.current?.getBoundingClientRect();
+          const card = entry.target.getBoundingClientRect();
+          const visible = !!viewport && card.bottom > viewport.top && card.top < viewport.bottom && card.right > viewport.left && card.left < viewport.right;
+          nearby.set(identity, { ref, priority: visible ? "visible" : "prefetch" });
+        } else nearby.delete(identity);
       }
       setNearViewport([...nearby.values()]);
-    }, { root: root.current, rootMargin: "80px" });
+    }, { root: root.current, rootMargin: "80px", threshold: 0 });
     root.current?.querySelectorAll("[data-event-key]").forEach(element => observer.observe(element));
     return () => observer.disconnect();
   }, [signature]);
@@ -108,20 +146,33 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
     {query.error && <p role="alert" className="p-3 text-sm text-destructive">{query.error.message}</p>}
     {errors.map(error => <p role="alert" key={error} className="p-3 text-sm text-destructive">{error}</p>)}
     <ol className="space-y-2">{displayed.map(item => {
-      const description = descriptions[item.key];
-      const retrySeconds = Math.max(0, Math.ceil(((description?.retryAt ?? 0) - now) / 1000));
+      const ref = { key: item.key, id: item.id };
+      const description = descriptions[dashboardSummaryIdentity(ref)];
+      const status = description?.item;
+      const summary = status?.state === "done" ? status.text : undefined;
+      const retrySeconds = Math.max(0, Math.ceil(((status?.retryAt ?? 0) - now) / 1000));
+      const reason = dashboardReasonText(status?.reason);
+      const canReplay = !!status?.replayable && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
+      const recheckScope = status?.scope ?? (status?.reason === "route_blocked" ? "route" : status?.reason === "shared_blocked" ? "shared" : undefined);
+      const canRecheck = status?.state === "blocked" && (recheckScope === "shared" || (recheckScope === "route" && !!status.route));
       return <li key={item.id} data-event-key={item.key} data-event-id={item.id}>
-      <button aria-label={description?.summary ? undefined : `${item.source === "message" ? `${item.senderName} → ${item.recipientName}` : item.projectName}: ${item.title}`} onClick={() => onSelect(item)} className="flex w-full items-start gap-3 rounded-xl border border-border bg-background p-3 text-left transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-2 focus-visible:outline-[var(--brand)]">
+      <button aria-label={summary ? undefined : `${item.source === "message" ? `${item.senderName} → ${item.recipientName}` : item.projectName}: ${item.title}`} onClick={() => onSelect(item)} className="flex w-full items-start gap-3 rounded-xl border border-border bg-background p-3 text-left transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-2 focus-visible:outline-[var(--brand)]">
         <span aria-hidden="true" className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white" style={{ background: avatarColor(item.actor) }}>{initials(item.actor)}</span>
         <span className="min-w-0 flex-1">
           <span className="mb-1 flex items-start justify-between gap-2"><span className="break-words text-[11px] font-semibold text-[var(--text-2)] [overflow-wrap:anywhere]">{item.source === "message" ? `${item.senderName} → ${item.recipientName}` : item.projectName}</span><time dateTime={item.at} className="shrink-0 text-[10px] text-[var(--text-3)]">{relTime(item.at)}</time></span>
-          {description?.summary ? <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{description.summary}</span> : <>
+          {summary ? <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{summary}</span> : <>
             <span className="block break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">{item.title}</span>
-            {description?.error ? <span className="mt-1 block text-xs text-destructive">{description.error}</span> : <span className="mt-1 block text-xs text-muted-foreground" role="status">Описание ожидает обработки…</span>}
+            <span className="mt-1 block text-xs text-muted-foreground" role="status">{dashboardSummaryStateText(status, !!description?.checking, now)}</span>
+            {reason && <span className="mt-1 block text-xs text-destructive">{reason}</span>}
+            {description?.error && <span role="alert" className="mt-1 block text-xs text-destructive">{description.error}</span>}
+            {description?.note && <span role="status" className="mt-1 block text-xs text-muted-foreground">{description.note}</span>}
           </>}
+          {status && (status.route || status.model || status.scope) && <span className="mt-1 block text-[11px] text-muted-foreground">{status.route ? `Маршрут: ${status.route}` : status.scope === "shared" ? "Маршрут: общий" : "Маршрут: scoped"}{status.model ? ` · Модель: ${status.model}` : ""}</span>}
         </span>
       </button>
-      {description?.error && <button type="button" disabled={retrySeconds > 0} onClick={() => retry(item.key)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:cursor-wait disabled:no-underline">{retrySeconds > 0 ? `Повторить через ${retrySeconds} с` : "Повторить описание"}</button>}
+      {!summary && description?.error && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description.checking ? "Проверка…" : "Проверить состояние"}</button>}
+      {!summary && canReplay && <button type="button" disabled={description?.checking} onClick={() => retry(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Повтор…" : "Повторить обработку"}</button>}
+      {!summary && canRecheck && <button type="button" disabled={description?.rechecking} onClick={() => recheck(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.rechecking ? "Проверка…" : `Перепроверить ${recheckScope === "route" ? "маршрут" : "общий исполнитель"}`}</button>}
     </li>;
     })}</ol>
     <div ref={sentinel} className="flex h-8 justify-center p-2">{query.isFetching && <Loader2 size={16} className="animate-spin text-muted-foreground" aria-label="Загрузка событий" />}</div>

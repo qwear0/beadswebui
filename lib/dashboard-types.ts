@@ -1,7 +1,26 @@
 export interface DashboardSettings {
   model: string;
+  /** Optional on the wire for compatibility with settings written before peer routing. */
+  peerModel?: string | null;
   reasoningEffort: "low" | "medium" | "high" | "xhigh";
   prompt: string;
+}
+
+export const DEFAULT_DASHBOARD_MODEL = "subshare_api/gpt-6-luna";
+export const DEFAULT_DASHBOARD_PEER_MODEL = "subshare/gpt-6-luna";
+
+/** Resolve only known historical defaults; custom legacy model values stay untouched. */
+export function defaultDashboardPeerModel(model: string): string | null {
+  if (model === DEFAULT_DASHBOARD_MODEL) return DEFAULT_DASHBOARD_PEER_MODEL;
+  if (model === DEFAULT_DASHBOARD_PEER_MODEL) return DEFAULT_DASHBOARD_MODEL;
+  return null;
+}
+
+export function normalizeDashboardSettings(settings: DashboardSettings): DashboardSettings & { peerModel: string | null } {
+  return {
+    ...settings,
+    peerModel: settings.peerModel === undefined ? defaultDashboardPeerModel(settings.model) : settings.peerModel,
+  };
 }
 
 export const DEFAULT_DASHBOARD_PROMPT = `Write a factual Russian activity description for a non-technical project manager.
@@ -14,13 +33,17 @@ Style examples (use only facts present in each input, never copy their facts):
 «Агент закрыл задачу в beadswebui о сохранении настроек: исправлены потеря промпта после перезапуска, повторная генерация и неверная модель; ручная проверка прошла.»
 «Агент оставил в Neuro-gate отметку: права доступа проверены, модель видна в каталоге; следующий шаг — испытать реальный запрос, не меняя ключи и не перезапуская шлюз.»`;
 
-export const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
-  model: "subshare_api/gpt-6-luna",
+export const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings & { peerModel: string | null } = {
+  model: DEFAULT_DASHBOARD_MODEL,
+  peerModel: DEFAULT_DASHBOARD_PEER_MODEL,
   reasoningEffort: "xhigh",
   prompt: DEFAULT_DASHBOARD_PROMPT,
 };
 
 export interface DashboardEventRef { key: string; id: string }
+export function dashboardSummaryIdentity(ref: DashboardEventRef): string {
+  return JSON.stringify([ref.key, ref.id]);
+}
 interface EventBase extends DashboardEventRef {
   projectId: string;
   projectName: string;
@@ -48,3 +71,31 @@ export interface DashboardSummaryResponse {
   /** Remaining cooldowns, not server-clock timestamps. Retries are explicit. */
   retryAfterMs: Record<string, number>;
 }
+
+export type DashboardSummaryPriority = "retry" | "visible" | "prefetch";
+export type DashboardSummaryState = "waiting" | "running" | "retrying" | "blocked" | "done" | "obsolete" | "failed" | "not_accepted";
+export type DashboardSummaryReason =
+  | "capacity" | "storage_unavailable" | "executor_unavailable" | "source_unavailable"
+  | "source_obsolete" | "route_blocked" | "shared_blocked" | "malformed" | "invalid"
+  | "not_found" | "source_retry";
+export type DashboardSummaryScope = "shared" | "route";
+
+export interface DashboardSummaryItem {
+  id?: string;
+  state: DashboardSummaryState;
+  reason?: DashboardSummaryReason | (string & {});
+  /** Unix timestamp in milliseconds. */
+  retryAt?: number;
+  text?: string;
+  route?: string;
+  model?: string;
+  scope?: DashboardSummaryScope;
+  replayable?: boolean;
+}
+export interface DashboardSummaryItemsResponse {
+  items: Record<string, DashboardSummaryItem>;
+}
+export type DashboardSummaryAdmitEntry = {
+  ref: DashboardEventRef;
+  priority: DashboardSummaryPriority;
+};

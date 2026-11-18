@@ -4,13 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { DEFAULT_DASHBOARD_SETTINGS, type DashboardSettings } from "./dashboard-types";
+import { DEFAULT_DASHBOARD_SETTINGS, defaultDashboardPeerModel, type DashboardSettings } from "./dashboard-types";
 
+const modelSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_.:/-]+$/);
 export const dashboardSettingsSchema = z.object({
-  model: z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9_.:/-]+$/),
+  model: modelSchema,
+  peerModel: modelSchema.nullable().optional(),
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]),
   prompt: z.string().trim().min(20).max(16000),
-}).strict();
+}).strict().transform(settings => ({
+  ...settings,
+  peerModel: settings.peerModel === undefined ? defaultDashboardPeerModel(settings.model) : settings.peerModel,
+})).refine(settings => settings.peerModel === null || settings.peerModel !== settings.model, {
+  message: "Peer model must be distinct from the primary model",
+  path: ["peerModel"],
+});
 
 export function dashboardConfigDir() {
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "bead-me-up-scotty");

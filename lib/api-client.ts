@@ -1,5 +1,5 @@
 import type { Bead, CreateInput, UpdateInput, DepType } from "./schema";
-import type { DashboardActivityResponse, DashboardEventRef, DashboardSettings, DashboardSummaryResponse } from "./dashboard-types";
+import type { DashboardActivityResponse, DashboardEventRef, DashboardSettings, DashboardSummaryAdmitEntry, DashboardSummaryItemsResponse, DashboardSummaryScope } from "./dashboard-types";
 import type { AgentMessage, AgentTelemetryError } from "./agent-protocol";
 import type { UpdateStatus, UpdateResult, UpdateChannel, UpdateTarget } from "./update-types";
 import type { AgentsResponse, AgentConversationsResponse, AgentMessagesResponse, AgentPageOptions } from "./agent-protocol";
@@ -169,7 +169,24 @@ export const api = {
   dashboardActivity: (cursor?: string | null, signal?: AbortSignal) => request<DashboardActivityResponse>(`/api/dashboard/activity${cursor ? `?cursor=${enc(cursor)}` : ""}`, { cache: "no-store", signal }),
   dashboardSettings: () => request<DashboardSettings>("/api/dashboard/settings", { cache: "no-store" }),
   saveDashboardSettings: (settings: DashboardSettings) => request<DashboardSettings>("/api/dashboard/settings", { method: "PUT", body: JSON.stringify(settings) }),
-  dashboardSummaries: (events: DashboardEventRef[]) => request<DashboardSummaryResponse>("/api/dashboard/summaries", { method: "POST", body: JSON.stringify({ events }), signal: AbortSignal.timeout(210_000) }),
+  dashboardSummaryAdmit: (entries: DashboardSummaryAdmitEntry[], replay?: boolean) => {
+    if (entries.length > 40) throw new RangeError("Dashboard summary admission is limited to 40 entries");
+    return request<DashboardSummaryItemsResponse>("/api/dashboard/summaries", {
+      method: "POST", body: JSON.stringify({ action: "admit", entries, ...(replay ? { replay: true } : {}) }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  },
+  dashboardSummaryStatus: (refs: DashboardEventRef[]) => {
+    if (refs.length > 40) throw new RangeError("Dashboard summary status is limited to 40 entries");
+    return request<DashboardSummaryItemsResponse>("/api/dashboard/summaries", {
+      method: "POST", body: JSON.stringify({ action: "status", refs }), signal: AbortSignal.timeout(30_000),
+    });
+  },
+  dashboardSummaryRecheck: (scope: DashboardSummaryScope, route?: string) =>
+    request<{ ok: true }>("/api/dashboard/summaries", {
+      method: "POST", body: JSON.stringify({ action: "recheck", scope, ...(route ? { route } : {}) }),
+      signal: AbortSignal.timeout(30_000),
+    }),
   dashboardMessage: (id: string) => request<{ message: AgentMessage; errors: AgentTelemetryError[] }>(`/api/dashboard/messages/${enc(id)}`, { cache: "no-store" }),
   agents: (projectId?: string, signal?: AbortSignal) => request<AgentsResponse>(agentsBase(projectId), { cache: "no-store", signal }),
   agentConversations: (projectId?: string, options?: AgentPageOptions) =>
