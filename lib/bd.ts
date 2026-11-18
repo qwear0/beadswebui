@@ -2,9 +2,11 @@ import "server-only";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { promisify } from "node:util";
 import {
   beadSchema,
+  commentSchema,
   unwrapEnvelope,
   type Bead,
   type CreateInput,
@@ -29,13 +31,14 @@ export class BdError extends Error {
  * Run a bd command. Args are passed as an array (no shell) so titles and
  * descriptions are injection-safe. Always requests the JSON envelope.
  */
-async function runBdRaw(
+async function runBdBytes(
   args: string[],
   opts: { repoPath: string; actor?: string },
-): Promise<string> {
+): Promise<Buffer> {
   try {
     const { stdout } = await pExecFile(BD_BIN, args, {
       cwd: opts.repoPath,
+      encoding: "buffer",
       maxBuffer: 32 * 1024 * 1024,
       env: {
         ...process.env,
@@ -45,9 +48,9 @@ async function runBdRaw(
     });
     return stdout;
   } catch (err: unknown) {
-    const e = err as { stderr?: string; message?: string };
+    const e = err as { stderr?: Buffer; message?: string };
     // bd emits a JSON error object to stderr with a `code` when --json is active.
-    const stderr = (e.stderr || "").trim();
+    const stderr = e.stderr?.toString("utf8").trim() ?? "";
     try {
       const parsed = JSON.parse(stderr) as { error?: string; code?: string };
       if (parsed.error) throw new BdError(parsed.error, parsed.code);
@@ -65,6 +68,10 @@ async function runBdRaw(
   }
 }
 
+async function runBdRaw(args: string[], opts: { repoPath: string; actor?: string }): Promise<string> {
+  return (await runBdBytes(args, opts)).toString("utf8");
+}
+
 async function runBdJson<T = unknown>(
   args: string[],
   opts: { repoPath: string; actor?: string },
@@ -73,8 +80,19 @@ async function runBdJson<T = unknown>(
   return unwrapEnvelope(JSON.parse(out)) as T;
 }
 
+const dashboardComments = z.array(commentSchema.extend({
+  author: z.string(),
+  text: z.string(),
+  created_at: z.string().refine(at => Number.isFinite(Date.parse(at))),
+}));
+
 /** Parse `bd export --json` JSONL output into validated beads. */
-function parseExport(jsonl: string): Bead[] {
+function parseExport(bytes: Buffer, strict = false, gatesOnly = false): Bead[] {
+  const jsonl = strict ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8");
+  const badExport = () => new BdError("Incomplete or invalid bd issue export", "parse_error");
+  // bd writes a newline after each complete record (an empty export is valid).
+  if (strict && jsonl && !jsonl.endsWith("\n")) throw badExport();
+  const ids = new Set<string>();
   const beads: Bead[] = [];
   for (const line of jsonl.split("\n")) {
     const trimmed = line.trim();
@@ -83,11 +101,22 @@ function parseExport(jsonl: string): Bead[] {
     try {
       obj = JSON.parse(trimmed);
     } catch {
+      if (strict) throw badExport();
       continue;
     }
+    const record = obj as Record<string, unknown> | null;
+    // Inclusive exports also contain explicitly marked non-issue memories.
+    if (record?._type === "memory" && typeof record.key === "string" && typeof record.value === "string" && !("issue_type" in record)) continue;
+    if (!strict && gatesOnly && record?.issue_type !== "gate") continue;
     const parsed = beadSchema.safeParse(obj);
-    // Skip memory/non-issue records (they lack required issue fields).
-    if (parsed.success && parsed.data.issue_type) beads.push(parsed.data);
+    if (parsed.success && parsed.data.issue_type) {
+      const bead = parsed.data;
+      if (strict && (!bead.id || !bead.status || ids.has(bead.id)
+        || (bead.comment_count !== undefined && bead.comment_count !== bead.comments.length)
+        || (record?.comments !== undefined && !dashboardComments.safeParse(record.comments).success))) throw badExport();
+      if (strict) ids.add(bead.id);
+      if (!gatesOnly || bead.issue_type === "gate") beads.push(bead);
+    } else if (strict) throw badExport();
   }
   return beads;
 }
@@ -126,6 +155,43 @@ export async function isBdAvailable(repoPath: string): Promise<boolean> {
   return ok;
 }
 
+// Share the active CLI read by exact registered path, while allowing Dashboard
+// authority to reject malformed output that ordinary board reads tolerate.
+const inflightExports = new Map<string, Promise<[Buffer, Buffer]>>();
+async function listByPath(repoPath: string, strict = false): Promise<Bead[]> {
+  let read = inflightExports.get(repoPath);
+  if (!read) {
+    read = serializeWrite(repoPath, async () => [
+      await runBdBytes(["export", "--json"], { repoPath }),
+      await runBdBytes(["export", "--all", "--json"], { repoPath }),
+    ]);
+    inflightExports.set(repoPath, read);
+    const clear = () => { inflightExports.delete(repoPath); };
+    void read.then(clear, clear);
+  }
+  const [regular, inclusive] = await read;
+  const beads = parseExport(regular, strict);
+  // Add gates hidden by infra filters, including closed dependency targets.
+  const gates = parseExport(inclusive, strict, true);
+  const byId = new Map(beads.map(bead => [bead.id, bead]));
+  for (const gate of gates) byId.set(gate.id, gate);
+  return [...byId.values()];
+}
+
+export function readDashboardBeads(repoPath: string): Promise<Bead[]> {
+  if (!fs.statSync(path.join(repoPath, ".beads")).isDirectory()) throw new BdError("Missing project .beads directory");
+  return listByPath(repoPath, true);
+}
+
+export function readDashboardBeadComments(repoPath: string, id: string) {
+  return serializeWrite(repoPath, async () => {
+    const data = await runBdBytes(["comments", "--json", "--", id], { repoPath });
+    return dashboardComments.parse(
+      unwrapEnvelope(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data))),
+    );
+  });
+}
+
 export function createBdStore(repoPath: string): BeadsStore {
   const ro = { repoPath };
   const rw = (actor: string) => ({ repoPath, actor });
@@ -153,17 +219,7 @@ export function createBdStore(repoPath: string): BeadsStore {
 
     async list() {
       if (inflightList) return inflightList;
-      inflightList = serializeWrite(repoPath, async () => {
-        const beads = parseExport(await runBdRaw(["export", "--json"], ro));
-        // Project infra filters can hide gates from export and redirect typed
-        // lists to the wisp plane. Use an inclusive export, but add only gates.
-        // Keep closed gates too: absent targets are treated as unresolved.
-        const gates = parseExport(await runBdRaw(["export", "--all", "--json"], ro))
-          .filter((bead) => bead.issue_type === "gate");
-        const byId = new Map(beads.map((bead) => [bead.id, bead]));
-        for (const gate of gates) byId.set(gate.id, gate);
-        return [...byId.values()];
-      });
+      inflightList = listByPath(repoPath);
       try {
         return await inflightList;
       } finally {

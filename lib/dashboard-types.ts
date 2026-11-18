@@ -65,13 +65,6 @@ export interface DashboardActivityResponse {
   nextCursor: string | null;
   errors: string[];
 }
-export interface DashboardSummaryResponse {
-  summaries: Record<string, string>;
-  errors: Record<string, string>;
-  /** Remaining cooldowns, not server-clock timestamps. Retries are explicit. */
-  retryAfterMs: Record<string, number>;
-}
-
 export type DashboardSummaryPriority = "retry" | "visible" | "prefetch";
 export type DashboardSummaryState = "waiting" | "running" | "retrying" | "blocked" | "done" | "obsolete" | "failed" | "not_accepted";
 export type DashboardSummaryReason =

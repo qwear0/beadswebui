@@ -1,9 +1,9 @@
 import "server-only";
-import { getConfig } from "./config";
-import { getStore, resetStore } from "./store";
+import { readDashboardRegistration } from "./config";
+import { readDashboardBeadComments, readDashboardBeads } from "./bd";
 import { buildActivity, readInteractionsStrict, type ActivityItem, type RawInteraction } from "./interactions";
 import type { Bead } from "./schema";
-import { AgentReadError, canonicalStateRoot, digest, directory, readHistory, readMessage, readProjectRegistry, readRegistry, readPresence, MESSAGE, type Registry } from "./agent-projection";
+import { AgentReadError, canonicalStateRoot, digest, directory, readHistory, readMessage, readPresence, MESSAGE, type Registry } from "./agent-projection";
 import { compareDashboardEvents, type DashboardActivityResponse, type DashboardEvent, type DashboardEventRef } from "./dashboard-types";
 import type { AgentMessage, AgentSnapshot } from "./agent-protocol";
 
@@ -47,10 +47,9 @@ function beadSummaryInput(projectName: string, item: ActivityItem, bead: Bead | 
 // authoritative source resolver, which deliberately performs fresh reads.
 type BeadActivity = { items: DashboardEvent[]; errors: string[] };
 const beadCaches = new Map<string, { scope: string; until: number; promise: Promise<BeadActivity> }>();
-async function beadActivity(registry: Registry) {
-  const config = getConfig();
-  const projects = config.projects.filter(project => registry.ids.includes(project.id));
-  const registered = new Set(config.projects.map(project => project.id));
+async function beadActivity(config: DashboardRegistration) {
+  const projects = config.projects;
+  const registered = new Set(projects.map(project => project.id));
   for (const id of beadCaches.keys()) if (!registered.has(id)) beadCaches.delete(id);
   const readProject = (project: typeof projects[number]) => {
     const scope = digest({ project: [project.id, project.path, project.name], allowlist: config.humanAllowlist });
@@ -60,7 +59,7 @@ async function beadActivity(registry: Registry) {
       const items: DashboardEvent[] = [];
       const errors: string[] = [];
       try {
-        const beads = await (await getStore(project.id)).list();
+        const beads = await readDashboardBeads(project.path);
         const interactions = readInteractionsStrict(project.path);
         const byId = new Map(beads.map(bead => [bead.id, bead]));
         const rawById = new Map(interactions.map(event => [event.id ?? `${event.issue_id}-${event.created_at}`, event]));
@@ -115,19 +114,17 @@ function mailEvent(message: AgentMessage, names: Map<string, string>, agents: Ag
   return mailSummary(message, names, agents).event;
 }
 
-type RegistrationSnapshot = { registry: Registry; config: ReturnType<typeof getConfig> };
+type DashboardRegistration = ReturnType<typeof readDashboardRegistration>;
+type RegistrationSnapshot = { registry: Registry; config: DashboardRegistration };
 function currentRegistration(requireCanonicalPaths: boolean): RegistrationSnapshot {
-  // Resolve migrations before comparing the app config with the protocol view.
-  const config = getConfig();
-  const registry = requireCanonicalPaths ? readRegistry() : readProjectRegistry();
-  const fingerprint = digest(config.projects.map(({ id, path }) => ({ id, path })));
-  if (fingerprint !== registry.revision) throw new Error("Project registration views are temporarily inconsistent");
-  return { registry, config };
+  const config = readDashboardRegistration(requireCanonicalPaths);
+  const projects = config.projects.map(({ id, path }) => ({ id, path }));
+  return { registry: { ids: projects.map(({ id }) => id).sort(), revision: digest(projects) }, config };
 }
 function mark(results: Map<string, SourceResult>, refs: DashboardEventRef[], code: SourceCode) {
   for (const ref of refs) results.set(ref.key, { code });
 }
-function projectSnapshot(config: ReturnType<typeof getConfig>, projectId: string) {
+function projectSnapshot(config: DashboardRegistration, projectId: string) {
   const project = config.projects.find(item => item.id === projectId);
   return project ? { id: project.id, name: project.name, path: project.path } : undefined;
 }
@@ -144,24 +141,11 @@ async function resolveBeadProject(projectId: string, refs: DashboardEventRef[], 
   let beads: Bead[];
   let interactions: RawInteraction[];
   try {
-    // A cached store is keyed only by project ID; discard it so a changed
-    // registration path cannot keep resolving against the old checkout.
-    resetStore(projectId);
-    beads = await (await getStore(projectId)).list();
+    beads = await readDashboardBeads(project.path);
     // ENOENT is the legitimate no-log case; all other I/O and parse failures
     // must remain retryable for Dashboard source authority.
     interactions = readInteractionsStrict(project.path);
   } catch { mark(results, refs, "source_retry"); return; }
-
-  let after: RegistrationSnapshot;
-  try { after = currentRegistration(false); }
-  catch { mark(results, refs, "source_retry"); return; }
-  const currentProject = projectSnapshot(after.config, projectId);
-  if (!after.registry.ids.includes(projectId) || !currentProject || currentProject.path !== project.path || currentProject.name !== project.name) {
-    mark(results, refs, "source_obsolete"); return;
-  }
-  if (after.registry.revision !== before.registry.revision) { mark(results, refs, "source_retry"); return; }
-  if (JSON.stringify(after.config.humanAllowlist) !== JSON.stringify(allowlist)) { mark(results, refs, "source_obsolete"); return; }
 
   const byId = new Map(beads.map(bead => [bead.id, bead]));
   const rawById = new Map(interactions.map(event => [event.id ?? `${event.issue_id}-${event.created_at}`, event]));
@@ -174,21 +158,50 @@ async function resolveBeadProject(projectId: string, refs: DashboardEventRef[], 
     if (!targetIds.has(item.id)) continue;
     matchingItemsById.set(item.id, [...(matchingItemsById.get(item.id) ?? []), item]);
   }
+  const projectResults = new Map<string, SourceResult>();
+  const checkedComments = new Map<string, Bead | null>();
+  const match = (ref: DashboardEventRef, item: ActivityItem, bead: Bead | undefined) => {
+    const source = beadSummaryInput(project.name, item, bead, rawById);
+    return sourceKey(ref.id, [projectId], source) === ref.key ? { source } : undefined;
+  };
   for (const ref of refs) {
     const itemId = ref.id.slice(projectId.length + 1);
-    const matchingItems = matchingItemsById.get(itemId) ?? [];
-    let source: unknown;
-    let matched = false;
-    for (const item of matchingItems) {
-      const input = beadSummaryInput(project.name, item, byId.get(item.issueId), rawById);
-      if (sourceKey(ref.id, [projectId], input) === ref.key) {
-        source = input;
-        matched = true;
-        break;
+    let found: SourceResult | undefined;
+    for (const item of matchingItemsById.get(itemId) ?? []) {
+      found = match(ref, item, byId.get(item.issueId));
+      if (found) break;
+    }
+    // Embedded bd can report success after a failed bulk comment lookup.
+    // Before interpreting an unmatched comment as obsolete, check its issue's
+    // comments via the exact CLI command, which propagates read failures.
+    const issueId = !found ? /^(.*)-comment-[0-9]+$/.exec(itemId)?.[1] : undefined;
+    const bead = issueId ? byId.get(issueId) : undefined;
+    if (bead) {
+      if (!checkedComments.has(bead.id)) {
+        try {
+          checkedComments.set(bead.id, { ...bead, comments: await readDashboardBeadComments(project.path, bead.id) });
+        } catch { checkedComments.set(bead.id, null); }
+      }
+      const verified = checkedComments.get(bead.id);
+      if (!verified) found = { code: "source_retry" };
+      else {
+        const item = buildActivity([verified], [], allowlist).find(candidate => candidate.id === itemId);
+        if (item) found = match(ref, item, verified);
       }
     }
-    results.set(ref.key, matched ? { source } : { code: "source_obsolete" });
+    projectResults.set(ref.key, found ?? { code: "source_obsolete" });
   }
+
+  let after: RegistrationSnapshot;
+  try { after = currentRegistration(false); }
+  catch { mark(results, refs, "source_retry"); return; }
+  const currentProject = projectSnapshot(after.config, projectId);
+  if (!currentProject || currentProject.path !== project.path || currentProject.name !== project.name) {
+    mark(results, refs, "source_obsolete"); return;
+  }
+  if (after.registry.revision !== before.registry.revision) { mark(results, refs, "source_retry"); return; }
+  if (JSON.stringify(after.config.humanAllowlist) !== JSON.stringify(allowlist)) { mark(results, refs, "source_obsolete"); return; }
+  for (const [key, result] of projectResults) results.set(key, result);
 }
 
 function sameAddress(a: AgentMessage["sender"], agent: AgentSnapshot) {
@@ -307,14 +320,14 @@ export async function summarySource(ref: DashboardEventRef): Promise<unknown> {
 }
 
 export async function dashboardActivity(cursor?: string | null): Promise<DashboardActivityResponse> {
-  const projectRegistry = readProjectRegistry();
-  const names = new Map(getConfig().projects.filter(project => projectRegistry.ids.includes(project.id)).map(project => [project.id, project.name]));
-  const beads = cursor ? { items: [], errors: [] } : await beadActivity(projectRegistry);
+  const config = readDashboardRegistration(false);
+  const beads = cursor ? { items: [], errors: [] } : await beadActivity(config);
   const errors = [...beads.errors];
   const items = [...beads.items];
   let nextCursor: string | null = null;
   try {
-    const registry = readRegistry();
+    const { registry, config: mailConfig } = currentRegistration(true);
+    const names = new Map(mailConfig.projects.map(project => [project.id, project.name]));
     const root = canonicalStateRoot();
     const presence = readPresence(root);
     if (presence.availability === "unavailable") errors.push("История сообщений агентов недоступна.");
@@ -325,8 +338,8 @@ export async function dashboardActivity(cursor?: string | null): Promise<Dashboa
       if (history.errors.length) errors.push("Часть истории сообщений агентов не удалось прочитать.");
     }
   } catch (error) {
-    if (!(error instanceof AgentReadError) || error.status < 500) throw error;
-    errors.push(`История сообщений агентов недоступна: ${error.message}`);
+    if (error instanceof AgentReadError && error.status < 500) throw error;
+    errors.push("История сообщений агентов недоступна.");
   }
   items.sort(compareDashboardEvents);
   return { items, nextCursor, errors };

@@ -33,8 +33,18 @@ export async function getDashboardSettings(): Promise<DashboardSettings> {
   }
 }
 
+function providerName(model: string) {
+  return /^([A-Za-z0-9_.-]+)\/.+/.exec(model)?.[1].toLowerCase();
+}
+
+// Older persisted selections are still readable; validate new selections.
+const dashboardSettingsWriteSchema = dashboardSettingsSchema.refine(settings => {
+  const provider = providerName(settings.model);
+  return !provider || !settings.peerModel || providerName(settings.peerModel) !== provider;
+}, { message: "Peer model must use a distinct provider", path: ["peerModel"] });
+
 export async function saveDashboardSettings(value: unknown) {
-  const settings = dashboardSettingsSchema.parse(value);
+  const settings = dashboardSettingsWriteSchema.parse(value);
   const dir = dashboardConfigDir();
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const temporary = path.join(dir, `.dashboard-${randomUUID()}.tmp`);
@@ -45,17 +55,4 @@ export async function saveDashboardSettings(value: unknown) {
     await fs.rm(temporary, { force: true });
   }
   return settings;
-}
-
-/** Credentials are server-only, never part of the editable settings DTO. */
-export async function neuroGateConnection() {
-  const base = (process.env.NEURO_GATE_URL || "http://127.0.0.1:8080/v1").replace(/\/$/, "");
-  let token = process.env.NEURO_GATE_TOKEN?.trim();
-  if (!token) {
-    try {
-      token = (await fs.readFile(process.env.NEURO_GATE_TOKEN_FILE || path.join(dashboardConfigDir(), "neuro-gate-token"), "utf8")).trim();
-    } catch { throw new Error("Neuro-gate consumer credential is not configured on the server"); }
-  }
-  if (!token) throw new Error("Neuro-gate consumer credential is empty");
-  return { base, token };
 }

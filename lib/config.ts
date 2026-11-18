@@ -4,6 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { mergeColumnOrder } from "./board-columns";
+import { z } from "zod";
+import { configRoot, PROJECT, readJson } from "./agent-projection";
 
 /**
  * Local app config (NOT stored in beads). Lives as a small JSON file under the
@@ -234,6 +236,49 @@ function persist(cfg: AppConfig): void {
   }
 }
 
+function actorSettings(stored: Partial<Pick<AppConfig, "humanActor" | "humanAllowlist" | "humanActorChosen">> | null, d: AppConfig) {
+  // An old, unchosen OS actor is a stale default, not a preference.
+  const staleActor = !stored?.humanActorChosen && stored?.humanActor === osUserName() && d.humanActor !== stored.humanActor;
+  const allowlist = stored?.humanAllowlist;
+  return {
+    humanActor: staleActor ? d.humanActor : stored?.humanActor || d.humanActor,
+    humanAllowlist: !allowlist?.length ? d.humanAllowlist
+      : staleActor && !allowlist.includes(d.humanActor) ? [...allowlist, d.humanActor] : allowlist,
+  };
+}
+
+const registrationSchema = z.object({
+  projects: z.array(z.object({
+    id: z.string().regex(PROJECT).refine(id => id !== DEMO_PROJECT.id),
+    path: z.string().max(4096).refine(p => path.isAbsolute(p) && path.normalize(p) === p && !p.includes("\0")),
+    name: z.string().optional(),
+  })).max(4096),
+  humanActor: z.string().optional(),
+  humanActorChosen: z.boolean().optional(),
+  humanAllowlist: z.array(z.string()).optional(),
+});
+
+/** Read one persisted snapshot, without migrating, caching or touching projects. */
+export function readDashboardRegistration(requireCanonicalPaths: boolean) {
+  const stored = registrationSchema.parse(readJson(configRoot(), ["bead-me-up-scotty", "config.json"], 1024 * 1024));
+  const ids = new Set<string>();
+  const paths = new Set<string>();
+  const projects = stored.projects.map(project => {
+    if (ids.has(project.id)) throw new Error("Duplicate registered project");
+    ids.add(project.id);
+    if (requireCanonicalPaths) {
+      const canonical = fs.realpathSync(project.path);
+      if (paths.has(canonical)) throw new Error("Ambiguous registered project path");
+      paths.add(canonical);
+    }
+    return { ...project, name: project.name || path.basename(project.path) || project.path };
+  });
+  const allowlist = stored.humanAllowlist;
+  const humanAllowlist = allowlist?.length && (stored.humanActorChosen || stored.humanActor !== osUserName())
+    ? allowlist : actorSettings(stored, defaults()).humanAllowlist;
+  return { projects, humanAllowlist };
+}
+
 export function getConfig(): AppConfig {
   if (cached) return cached;
   const d = defaults();
@@ -247,20 +292,8 @@ export function getConfig(): AppConfig {
     onDisk = null;
   }
 
-  // Before 0.3.1 the computed default (the OS user) was written to disk along
-  // with the first project, so an unchosen OS username on disk is a stale
-  // default rather than a preference. Replace it, and keep the new actor in the
-  // allowlist so the user's own writes still render as human.
-  const staleActor =
-    !onDisk?.humanActorChosen && onDisk?.humanActor === osUserName() && d.humanActor !== onDisk.humanActor;
-  const storedAllowlist = onDisk?.humanAllowlist && onDisk.humanAllowlist.length ? onDisk.humanAllowlist : null;
   const merged: AppConfig = {
-    humanActor: staleActor ? d.humanActor : onDisk?.humanActor || d.humanActor,
-    humanAllowlist: !storedAllowlist
-      ? d.humanAllowlist
-      : staleActor && !storedAllowlist.includes(d.humanActor)
-        ? [...storedAllowlist, d.humanActor]
-        : storedAllowlist,
+    ...actorSettings(onDisk, d),
     pollIntervalMs:
       typeof onDisk?.pollIntervalMs === "number" ? onDisk.pollIntervalMs : d.pollIntervalMs,
     projects: sanitizeProjects(onDisk?.projects),

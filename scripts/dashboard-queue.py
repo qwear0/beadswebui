@@ -27,12 +27,14 @@ MAX_STATUS = 200
 MAX_OUTSTANDING = 2_000
 VISIBLE_RESERVE = 250
 MAX_BATCH = 4
-MAX_INVITES_PER_CALL = 2
-MAX_INVITATIONS = 128
+MAX_INVITES_PER_CALL = 6
+MAX_INVITATIONS = 6
 INVITATION_TTL_MS = 30_000
 WORKER_DEADLINE_MS = 180_000
 LEASE_MARGIN_MS = 30_000
-MAX_ACTIVE_PER_ROUTE = 3
+MAX_ACTIVE_PER_PROVIDER = 3
+MAX_ACTIVE = 6
+MAX_BACKOFF_MS = 900_000
 AGE_BOOST_MS = 120_000
 MALFORMED_LIMIT = 3
 MAX_TEXT = 8_000
@@ -45,7 +47,7 @@ MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PROVIDER = 200
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 PROVIDER = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
-REF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,511}$")
+REF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+/-]{0,1023}$")
 SAFE_REASON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 TOKEN = re.compile(r"^[a-f0-9]{32}$")
 EFFORTS = {"low", "medium", "high", "xhigh"}
@@ -95,7 +97,7 @@ def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def ensure_state_path() -> Path:
+def state_path(write: bool) -> Path | None:
     override = os.environ.get("BMUS_DASHBOARD_QUEUE_STATE_DIR")
     if override is not None:
         if not os.path.isabs(override) or "\x00" in override:
@@ -109,19 +111,29 @@ def ensure_state_path() -> Path:
         invalid()
     directory = Path(state_home) / "bead-me-up-scotty"
     try:
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        info = directory.lstat()
+        if write:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            if write:
+                raise
+            return None
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
             raise QueueError("queue_unavailable")
-        os.chmod(directory, 0o700)
+        if write:
+            os.chmod(directory, 0o700)
         db_path = directory / "dashboard-queue.sqlite3"
-        try:
-            info = db_path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
-                raise QueueError("queue_unavailable")
-            os.chmod(db_path, 0o600)
-        except FileNotFoundError:
-            pass
+        for file in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+            try:
+                info = file.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                    raise QueueError("queue_unavailable")
+                if write and file == db_path:
+                    os.chmod(file, 0o600)
+            except FileNotFoundError:
+                if not write and file == db_path:
+                    return None
         return db_path
     except QueueError:
         raise
@@ -129,13 +141,19 @@ def ensure_state_path() -> Path:
         raise QueueError("queue_unavailable") from None
 
 
-def connect() -> sqlite3.Connection:
+def connect(write: bool) -> sqlite3.Connection | None:
     os.umask(0o077)
-    db_path = ensure_state_path()
+    db_path = state_path(write)
+    if db_path is None:
+        return None
     try:
         conn: sqlite3.Connection | None = None
-        conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+        # Do not use immutable=1: readers must observe the writer's live WAL.
+        conn = sqlite3.connect(str(db_path) if write else db_path.as_uri() + "?mode=ro",
+                               uri=not write, timeout=5.0, isolation_level=None)
         conn.row_factory = sqlite3.Row
+        if not write:
+            return conn
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
@@ -260,7 +278,7 @@ def validate_entry(value: Any) -> dict[str, Any]:
     value = exact_keys(value, {"id", "ref", "settings", "priority"})
     ident = safe_string(value["id"], 64, HEX64)
     ref = exact_keys(value["ref"], {"id", "key"})
-    ref_id = safe_string(ref["id"], 512, REF_ID)
+    ref_id = safe_string(ref["id"], 1024, REF_ID)
     ref_key = safe_string(ref["key"], 64, HEX64)
     settings = validate_settings(value["settings"])
     priority = value["priority"]
@@ -279,7 +297,7 @@ def validate_input(action: Any, value: Any) -> tuple[str, Any]:
     if not isinstance(action, str):
         invalid()
     if action == "admit":
-        value = exact_keys(value, {"entries"}, {"replayIds"})
+        value = exact_keys(value, {"entries"}, {"replayIds", "existingIds"})
         entries = value["entries"]
         replay_ids = value.get("replayIds", [])
         if not isinstance(entries, list) or len(entries) > MAX_ADMIT or not isinstance(replay_ids, list) or len(replay_ids) > MAX_ADMIT:
@@ -290,16 +308,33 @@ def validate_input(action: Any, value: Any) -> tuple[str, Any]:
         replay_ids = [safe_string(item, 64, HEX64) for item in replay_ids]
         if len(set(replay_ids)) != len(replay_ids):
             invalid()
-        return action, {"entries": entries, "replay_ids": set(replay_ids)}
+        existing_ids = value.get("existingIds", [])
+        if not isinstance(existing_ids, list) or len(existing_ids) > MAX_ADMIT:
+            invalid()
+        existing_ids = {safe_string(item, 64, HEX64) for item in existing_ids}
+        if not existing_ids.issubset({entry["id"] for entry in entries}):
+            invalid()
+        return action, {"entries": entries, "replay_ids": set(replay_ids), "existing_ids": existing_ids}
     if action == "status":
-        value = exact_keys(value, {"ids"})
+        value = exact_keys(value, {"ids"}, {"refs", "generations"})
         ids = value["ids"]
         if not isinstance(ids, list) or len(ids) > MAX_STATUS:
             invalid()
         ids = [safe_string(item, 64, HEX64) for item in ids]
         if len(set(ids)) != len(ids):
             invalid()
-        return action, {"ids": ids}
+        refs = value.get("refs")
+        if refs is not None:
+            if not isinstance(refs, list) or len(refs) != len(ids):
+                invalid()
+            refs = [exact_keys(ref, {"id", "key"}) for ref in refs]
+            refs = [(safe_string(ref["id"], 1024, REF_ID), safe_string(ref["key"], 64, HEX64)) for ref in refs]
+        generations = value.get("generations")
+        if generations is not None:
+            if refs is None or not isinstance(generations, list) or len(generations) != len(ids):
+                invalid()
+            generations = [safe_string(item, 64, HEX64) if item is not None else None for item in generations]
+        return action, {"ids": ids, "refs": refs, "generations": generations}
     if action == "invite":
         exact_keys(value, set())
         return action, {}
@@ -340,16 +375,19 @@ def validate_input(action: Any, value: Any) -> tuple[str, Any]:
             invalid()
         return action, {"token": token, "outcomes": normalized}
     if action == "recheck":
-        value = exact_keys(value, {"scope"}, {"route"})
+        value = exact_keys(value, {"scope"}, {"route", "configured"})
         scope = value["scope"]
         route = value.get("route")
         if not isinstance(scope, str) or scope not in {"shared", "route"}:
             invalid()
         if scope == "route":
             route = safe_string(route, MAX_PROVIDER, PROVIDER)
-        elif route is not None:
+        elif route is not None or "configured" in value:
             invalid()
-        return action, {"scope": scope, "route": route}
+        configured = value.get("configured", False)
+        if not isinstance(configured, bool):
+            invalid()
+        return action, {"scope": scope, "route": route, "configured": configured}
     invalid()
 
 
@@ -387,18 +425,18 @@ def set_circuit(conn: sqlite3.Connection, scope: str, route: str = "", **fields:
 
 def jittered(base_ms: int) -> int:
     spread = max(1, base_ms // 5)
-    return max(1, base_ms - spread + secrets.randbelow(spread * 2 + 1))
+    return min(MAX_BACKOFF_MS, max(1, base_ms - spread + secrets.randbelow(spread * 2 + 1)))
 
 
 def item_backoff(retry_count: int) -> int:
-    return jittered(min(900_000, 15_000 * (2 ** min(max(retry_count, 0), 6))))
+    return jittered(min(MAX_BACKOFF_MS, 15_000 * (2 ** min(max(retry_count, 0), 6))))
 
 
 def record_route_transient(conn: sqlite3.Connection, route: str, now: int, retry_after: int = 0) -> tuple[int, bool]:
     current = get_circuit(conn, "route", route)
     count = int(current["transient_count"]) + 1 if current else 1
     backoff_count = int(current["backoff_count"]) if current else 0
-    base = min(900_000, 15_000 * (2 ** min(backoff_count, 6)))
+    base = min(MAX_BACKOFF_MS, 15_000 * (2 ** min(backoff_count, 6)))
     delay = max(jittered(base), retry_after, 60_000 if count >= 2 else 0)
     probe = count >= 2
     set_circuit(conn, "route", route,
@@ -411,7 +449,7 @@ def record_route_transient(conn: sqlite3.Connection, route: str, now: int, retry
 def record_shared_transient(conn: sqlite3.Connection, now: int, retry_after: int = 0) -> int:
     current = get_circuit(conn, "shared")
     backoff_count = int(current["backoff_count"]) if current else 0
-    base = min(900_000, 15_000 * (2 ** min(backoff_count, 6)))
+    base = min(MAX_BACKOFF_MS, 15_000 * (2 ** min(backoff_count, 6)))
     delay = max(jittered(base), retry_after)
     set_circuit(conn, "shared", "", hard_blocked=0, open_until=now + delay,
                 transient_count=(int(current["transient_count"]) + 1 if current else 1),
@@ -487,8 +525,26 @@ def queue_row(conn: sqlite3.Connection, ident: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM queue_items WHERE id=?", (ident,)).fetchone()
 
 
-def active_count(conn: sqlite3.Connection, route: str, now: int) -> int:
-    return int(conn.execute("SELECT COUNT(*) FROM attempts WHERE state='active' AND route=? AND lease_until>?", (route, now)).fetchone()[0])
+def provider_name(route: str) -> str | None:
+    prefix, slash, model = route.partition("/")
+    return prefix.lower() if slash and model and re.fullmatch(r"[A-Za-z0-9_.-]+", prefix) else None
+
+
+def active_counts(conn: sqlite3.Connection, now: int) -> dict[str | None, int]:
+    counts: dict[str | None, int] = {}
+    for (route,) in conn.execute("SELECT route FROM attempts WHERE state='active' AND lease_until>?", (now,)):
+        provider = provider_name(route)
+        counts[provider] = counts.get(provider, 0) + 1
+    return counts
+
+
+def free_slots(route: str, active: dict[str | None, int]) -> int:
+    provider = provider_name(route)
+    total = sum(active.values())
+    if provider is None or active.get(None, 0):
+        # An opaque route could resolve to any already busy provider.
+        return MAX_ACTIVE_PER_PROVIDER - total
+    return min(MAX_ACTIVE - total, MAX_ACTIVE_PER_PROVIDER - active.get(provider, 0))
 
 
 def shared_route_state(conn: sqlite3.Connection, now: int) -> tuple[bool, int, bool, str | None]:
@@ -523,21 +579,22 @@ def route_state(conn: sqlite3.Connection, route: str, now: int) -> tuple[bool, i
     return True, 0, False, None
 
 
-def route_candidates(conn: sqlite3.Connection, row: sqlite3.Row, now: int, require_slot: bool) -> list[dict[str, Any]]:
-    shared_ok, shared_retry, shared_probe, shared_reason = shared_route_state(conn, now)
+def route_candidates(conn: sqlite3.Connection, row: sqlite3.Row, now: int,
+                     active: dict[str | None, int] | None = None) -> list[dict[str, Any]]:
+    shared_ok, _, shared_probe, _ = shared_route_state(conn, now)
     if not shared_ok:
         return []
     settings = json.loads(row["settings_json"])
     candidates = []
     for route in settings["providers"]:
-        ok, retry_at, probe, reason = route_state(conn, route, now)
+        ok, _, probe, _ = route_state(conn, route, now)
         if not ok:
             continue
         failure = conn.execute("SELECT retry_at FROM item_route_failures WHERE item_id=? AND route=?", (row["id"], route)).fetchone()
         if failure and int(failure["retry_at"]) > now:
             continue
-        free = MAX_ACTIVE_PER_ROUTE - active_count(conn, route, now)
-        if free <= 0 and require_slot:
+        free = free_slots(route, active) if active is not None else 0
+        if active is not None and free <= 0:
             continue
         candidates.append({"route": route, "free": free, "route_probe": probe, "shared_probe": shared_probe})
     return candidates
@@ -561,25 +618,27 @@ def choose_route(conn: sqlite3.Connection, candidates: list[dict[str, Any]]) -> 
 def ordered_queued(conn: sqlite3.Connection, now: int, excluded: set[str]) -> list[sqlite3.Row]:
     rows = conn.execute("SELECT * FROM queue_items WHERE state='queued' AND retry_at<=?", (now,)).fetchall()
     def key(row: sqlite3.Row) -> tuple[int, int, int, str]:
-        ready_at = max(int(row["created_at"]), int(row["retry_at"]))
-        aged = now - ready_at >= AGE_BOOST_MS
+        created_at = int(row["created_at"])
+        aged = now - created_at >= AGE_BOOST_MS
         pri = {"retry": 0, "visible": 1, "prefetch": 2}.get(row["priority"], 3)
-        return (0 if aged else 1, pri, ready_at, row["id"])
+        return (0 if aged else 1, 0 if aged else pri, created_at, row["id"])
     return [row for row in sorted(rows, key=key) if row["id"] not in excluded]
 
 
 def make_plan(conn: sqlite3.Connection, now: int, excluded: set[str]) -> tuple[list[sqlite3.Row], str, bool, bool] | None:
-    for first in ordered_queued(conn, now, excluded):
-        candidates = route_candidates(conn, first, now, True)
+    active = active_counts(conn, now)
+    ordered = ordered_queued(conn, now, excluded)
+    for index, first in enumerate(ordered):
+        candidates = route_candidates(conn, first, now, active)
         selected = choose_route(conn, candidates)
         if selected is None:
             continue
         batch = [first]
         if not first["single_only"]:
-            for row in ordered_queued(conn, now, excluded | {first["id"]}):
+            for row in ordered[index + 1:]:
                 if row["single_only"] or row["settings_json"] != first["settings_json"]:
                     continue
-                options = {item["route"]: item for item in route_candidates(conn, row, now, True)}
+                options = {item["route"]: item for item in route_candidates(conn, row, now, active)}
                 if selected["route"] in options:
                     batch.append(row)
                     if len(batch) >= MAX_BATCH:
@@ -599,7 +658,7 @@ def result_item(row: sqlite3.Row, conn: sqlite3.Connection, now: int) -> dict[st
             output.update(state="blocked", reason="shared_blocked", scope="shared")
             return output
         routes = json.loads(row["settings_json"])["providers"]
-        options = route_candidates(conn, row, now, False)
+        options = route_candidates(conn, row, now)
         if options:
             if retry_at > now:
                 output.update(state="retrying", reason=row["reason"] or "retry_backoff", retryAt=retry_at)
@@ -632,7 +691,7 @@ def result_item(row: sqlite3.Row, conn: sqlite3.Connection, now: int) -> dict[st
             retry_at = min(retry_times) if retry_times else now + 1
             output.update(state="retrying", reason=row["reason"] or "route_transient", scope="route", retryAt=retry_at)
         else:
-            output.update(state="blocked", reason="route_blocked", scope="route")
+            output.update(state="blocked", reason="route_blocked", scope="route", route=routes[0])
         return output
     if state == "running":
         output["state"] = "running"
@@ -671,9 +730,9 @@ def handle_admit(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
                 and (row["priority"] == "visible" or nonvisible < MAX_OUTSTANDING - VISIBLE_RESERVE)):
             conn.execute("DELETE FROM item_route_failures WHERE item_id=?", (ident,))
             conn.execute(
-                "UPDATE queue_items SET state='queued',priority='retry',created_at=?,updated_at=?,retry_at=0,retry_count=0,malformed_count=0,"
+                "UPDATE queue_items SET state='queued',priority='retry',updated_at=?,retry_at=0,retry_count=0,malformed_count=0,"
                 "single_only=0,current_token=NULL,reason=NULL,text=NULL,route=NULL,model=NULL,scope=NULL,replayable=0 WHERE id=?",
-                (now, now, ident),
+                (now, ident),
             )
             outstanding += 1
             if row["priority"] != "visible":
@@ -688,10 +747,17 @@ def handle_admit(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
                 continue
             current_priority = row["priority"]
             rank = {"retry": 0, "visible": 1, "prefetch": 2}
-            if rank[entry["priority"]] < rank[current_priority]:
-                conn.execute("UPDATE queue_items SET priority=?,updated_at=? WHERE id=?", (entry["priority"], now, ident))
+            if row["state"] in {"queued", "running"} and rank[entry["priority"]] < rank[current_priority]:
+                conn.execute("UPDATE queue_items SET priority=? WHERE id=?", (entry["priority"], ident))
+                if current_priority != "visible" and entry["priority"] == "visible":
+                    nonvisible -= 1
+                elif current_priority == "visible" and entry["priority"] != "visible":
+                    nonvisible += 1
                 row = queue_row(conn, ident)
             response.append(result_item(row, conn, now))
+            continue
+        if ident in data["existing_ids"] or ident in replay_ids:
+            response.append({"id": ident, "state": "not_accepted", "reason": "not_found"})
             continue
         if outstanding >= MAX_OUTSTANDING or (entry["priority"] != "visible" and nonvisible >= MAX_OUTSTANDING - VISIBLE_RESERVE):
             response.append({"id": ident, "state": "not_accepted", "reason": "queue_capacity", "replayable": False})
@@ -709,8 +775,28 @@ def handle_admit(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
 
 def handle_status(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> dict[str, Any]:
     items = []
-    for ident in data["ids"]:
+    for index, ident in enumerate(data["ids"]):
         row = queue_row(conn, ident)
+        if data["refs"] is not None:
+            ref = data["refs"][index]
+            if row and (row["ref_id"], row["ref_key"]) != ref:
+                items.append({"id": ident, "state": "not_accepted", "reason": "id_conflict"})
+                continue
+            generation = data["generations"][index] if data["generations"] is not None else None
+            retained = queue_row(conn, generation) if generation and generation != ident else None
+            if retained and (retained["ref_id"], retained["ref_key"]) != ref:
+                retained = None
+            if not row and not retained:
+                retained = conn.execute(
+                    "SELECT * FROM queue_items WHERE ref_id=? AND ref_key=? AND "
+                    "(state IN ('queued','running') OR (state='failed' AND replayable=1)) "
+                    "ORDER BY CASE WHEN state='failed' THEN 1 ELSE 0 END, created_at DESC, id LIMIT 1", ref,
+                ).fetchone()
+            if retained:
+                item = result_item(retained, conn, now)
+                item.update(requestId=ident, retainedSettings=json.loads(retained["settings_json"]))
+                items.append(item)
+                continue
         if row:
             items.append(result_item(row, conn, now))
     return {"items": items}
@@ -759,16 +845,17 @@ def handle_claim(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
     if any(row["settings_json"] != rows[0]["settings_json"] or row["single_only"] for row in rows[1:]) or (rows[0]["single_only"] and len(rows) > 1):
         conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
         return {"claim": None}
-    candidates = {item["route"]: item for item in route_candidates(conn, rows[0], now, True)}
+    active = active_counts(conn, now)
+    candidates = {item["route"]: item for item in route_candidates(conn, rows[0], now, active)}
     for row in rows[1:]:
-        available = {item["route"] for item in route_candidates(conn, row, now, True)}
+        available = {item["route"] for item in route_candidates(conn, row, now, active)}
         candidates = {route: choice for route, choice in candidates.items() if route in available}
     selected = choose_route(conn, list(candidates.values()))
     if selected is None or selected["route"] not in candidates:
         return {"claim": None}
     # Recheck capacity and circuit probe ownership under BEGIN IMMEDIATE.
     route = selected["route"]
-    if active_count(conn, route, now) >= MAX_ACTIVE_PER_ROUTE:
+    if free_slots(route, active_counts(conn, now)) <= 0:
         return {"claim": None}
     shared = get_circuit(conn, "shared")
     route_circuit = get_circuit(conn, "route", route)
@@ -936,21 +1023,38 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
 def handle_recheck(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> dict[str, Any]:
     scope = data["scope"]
     route = data["route"] or ""
-    set_circuit(conn, scope, route, hard_blocked=0, open_until=now, transient_count=0,
-                probe_required=1, probe_token=None, backoff_count=0, reason="recheck")
+    if scope == "route" and not data["configured"]:
+        retained = conn.execute(
+            "SELECT 1 FROM queue_items AS item, json_each(item.settings_json, '$.providers') AS provider "
+            "WHERE (item.state IN ('queued','running') OR (item.state='failed' AND item.replayable=1)) "
+            "AND provider.value=? LIMIT 1", (route,),
+        ).fetchone()
+        if not retained:
+            invalid()
+    circuit = get_circuit(conn, scope, route)
+    if circuit and circuit["hard_blocked"] and not circuit["probe_token"]:
+        set_circuit(conn, scope, route, hard_blocked=0, open_until=now, transient_count=0,
+                    probe_required=1, probe_token=None, backoff_count=0, reason="recheck")
     return {"ok": True}
 
 
 def dispatch(action: str, raw_input: Any) -> dict[str, Any]:
     action, data = validate_input(action, raw_input)
-    conn = connect()
+    write = action not in {"status", "resolve"}
+    conn = connect(write)
+    if conn is None:
+        return {"items": []} if action == "status" else {"claim": None}
     try:
         now = now_ms()
-        write = action not in {"status", "resolve"}
         tx_begin(conn, write)
         if write:
             recover_expired_attempts(conn, now)
             prune_metadata(conn, now)
+        elif conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
+            "('queue_items','attempts','invitations','circuits','item_route_failures','receipts','queue_meta')"
+        ).fetchone()[0] != 7:
+            raise QueueError("queue_unavailable")
         if action == "admit":
             result = handle_admit(conn, data, now)
         elif action == "status":

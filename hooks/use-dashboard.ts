@@ -36,6 +36,9 @@ export interface DashboardSummaryView {
 }
 type AdmissionJob = { entry: DashboardSummaryAdmitEntry; revision: number };
 const ACTIVE_STATES = new Set(["waiting", "running", "retrying"]);
+const ACCEPTED_STATES = new Set([...ACTIVE_STATES, "blocked"]);
+const shouldPoll = (item: DashboardSummaryItem) => ACTIVE_STATES.has(item.state) || item.reason === "source_retry";
+const due = (item: DashboardSummaryItem) => item.reason !== "source_retry" || (item.retryAt ?? 0) <= Date.now();
 const MAX_BATCH = 40;
 const IDLE_REQUEST_ERROR = "Не удалось подтвердить состояние описания. Проверьте соединение и запросите состояние ещё раз.";
 const chunks = <T,>(values: T[], size: number): T[][] => {
@@ -55,6 +58,7 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
   const [rechecking, setRechecking] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const currentEntries = useRef(entries);
+  const currentStored = useRef(stored);
   const currentRevision = useRef(activityRevision);
   const checked = useRef(new Set<string>());
   const checkedRevision = useRef(activityRevision);
@@ -71,14 +75,14 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
 
   const setItems = useCallback((refs: DashboardEventRef[], response: { items: Record<string, DashboardSummaryItem> }, revision: number) => {
     if (!mounted.current || currentRevision.current !== revision) return;
-    setStored(current => {
-      const next = { ...current };
-      for (const ref of refs) {
-        const item = response.items[ref.key] ?? { id: ref.id, state: "not_accepted" as const, reason: "not_found" as const };
-        next[dashboardSummaryIdentity(ref)] = { item: { ...item, id: item.id ?? ref.id }, revision };
+    const received = refs.map(ref => {
+      const item = response.items[ref.key];
+      if (!item || (!ACCEPTED_STATES.has(item.state) && !["done", "failed", "obsolete", "not_accepted"].includes(item.state))) {
+        throw new Error("Missing Dashboard summary status");
       }
-      return next;
+      return [dashboardSummaryIdentity(ref), { item: { ...item, id: item.id ?? ref.id }, revision }] as const;
     });
+    setStored(current => ({ ...current, ...Object.fromEntries(received) }));
     setChecking(current => {
       const next = { ...current };
       for (const ref of refs) delete next[dashboardSummaryIdentity(ref)];
@@ -99,12 +103,14 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
       return next;
     });
     setErrors(current => ({ ...current, ...Object.fromEntries(refs.map(ref => [dashboardSummaryIdentity(ref), IDLE_REQUEST_ERROR])) }));
+    const retryAt = Date.now() + 5_000;
     setStored(current => {
       const next = { ...current };
       for (const ref of refs) {
-        const id = dashboardSummaryIdentity(ref);
-        if (!next[id] || next[id].revision !== revision) {
-          next[id] = { revision, item: { id: ref.id, state: "not_accepted" } };
+        const identity = dashboardSummaryIdentity(ref);
+        const saved = next[identity];
+        if (saved?.revision === revision && saved.item.state === "done") {
+          next[identity] = { revision, item: { id: saved.item.id, state: "retrying", reason: "source_retry", retryAt } };
         }
       }
       return next;
@@ -122,12 +128,16 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
         setChecking(current => ({ ...current, [dashboardSummaryIdentity(ref)]: true }));
       });
       try {
-        const response = await api.dashboardSummaryStatus(fresh);
+        const requested = fresh.map(ref => {
+          const generation = currentStored.current[dashboardSummaryIdentity(ref)]?.item.id;
+          return generation && /^[a-f0-9]{64}$/.test(generation) ? { ...ref, generation } : ref;
+        });
+        const response = await api.dashboardSummaryStatus(requested);
         if (!mounted.current || currentRevision.current !== revision) continue;
         setItems(fresh, response, revision);
         const missing = fresh.filter(ref => {
           const item = response.items[ref.key];
-          return !item || (item.state === "not_accepted" && item.reason === "not_found");
+          return item?.state === "not_accepted" && item.reason === "not_found";
         });
         const current = new Map(currentEntries.current.map(entry => [dashboardSummaryIdentity(entry.ref), entry]));
         const admissions: AdmissionJob[] = [];
@@ -179,7 +189,11 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
         for (const job of batch) {
           const item = response.items[job.entry.ref.key];
           const identity = dashboardSummaryIdentity(job.entry.ref);
-          if (!replay && job.entry.priority === "prefetch" && item && ["waiting", "running", "retrying", "blocked"].includes(item.state)) {
+          if (!replay && item?.state === "not_accepted" && item.reason === "source_retry") {
+            // A typed refusal proves no commit. Recheck source before retrying.
+            autoAdmissionAttempts.current.delete(identity);
+          }
+          if (!replay && job.entry.priority === "prefetch" && item && ACCEPTED_STATES.has(item.state)) {
             prefetchAccepted.current.add(identity);
           }
         }
@@ -213,7 +227,6 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
   const entriesSignature = entries
     .map(entry => `${dashboardSummaryIdentity(entry.ref)}:${entry.priority}`)
     .sort().join("|");
-  const currentStored = useRef(stored);
   useEffect(() => {
     currentEntries.current = entries;
     currentRevision.current = activityRevision;
@@ -230,9 +243,12 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
       const revision = currentRevision.current;
       const active = currentEntries.current.filter(entry => {
         const saved = currentStored.current[dashboardSummaryIdentity(entry.ref)];
-        return saved?.revision === revision && ACTIVE_STATES.has(saved.item.state);
-      }).map(entry => entry.ref);
-      if (active.length) void statusReader.current?.(active, revision, false);
+        return saved?.revision === revision && shouldPoll(saved.item) && due(saved.item);
+      });
+      const pendingSource = active.filter(entry => currentStored.current[dashboardSummaryIdentity(entry.ref)].item.state === "not_accepted");
+      const accepted = active.filter(entry => currentStored.current[dashboardSummaryIdentity(entry.ref)].item.state !== "not_accepted");
+      if (accepted.length) void statusReader.current?.(accepted.map(entry => entry.ref), revision, false);
+      if (pendingSource.length) void statusReader.current?.(pendingSource.map(entry => entry.ref), revision, true);
       const missing = [...missingWhileHidden.current.values()];
       if (missing.length) void statusReader.current?.(missing, revision, true);
     };
@@ -271,17 +287,21 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
 
   const activeSignature = entries.filter(entry => {
     const saved = stored[dashboardSummaryIdentity(entry.ref)];
-    return saved?.revision === activityRevision && ACTIVE_STATES.has(saved.item.state);
+    return saved?.revision === activityRevision && shouldPoll(saved.item);
   }).map(entry => dashboardSummaryIdentity(entry.ref)).sort().join("|");
   useEffect(() => {
     if (!activeSignature) return;
     const poll = () => {
       if (document.visibilityState !== "visible") return;
-      const refs = currentEntries.current.filter(entry => {
-        const saved = currentStored.current[dashboardSummaryIdentity(entry.ref)];
-        return saved?.revision === currentRevision.current && ACTIVE_STATES.has(saved.item.state);
-      }).map(entry => entry.ref);
-      if (refs.length) void statusReader.current?.(refs, currentRevision.current, false);
+      const pendingSource: DashboardEventRef[] = [];
+      const accepted: DashboardEventRef[] = [];
+      for (const { ref } of currentEntries.current) {
+        const saved = currentStored.current[dashboardSummaryIdentity(ref)];
+        if (saved?.revision !== currentRevision.current || !shouldPoll(saved.item) || !due(saved.item)) continue;
+        (saved.item.state === "not_accepted" ? pendingSource : accepted).push(ref);
+      }
+      if (accepted.length) void statusReader.current?.(accepted, currentRevision.current, false);
+      if (pendingSource.length) void statusReader.current?.(pendingSource, currentRevision.current, true);
     };
     const timer = window.setInterval(poll, 5_000);
     return () => window.clearInterval(timer);
@@ -305,7 +325,8 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
     setRechecking(current => ({ ...current, [identity]: true }));
     setNotes(current => ({ ...current, [identity]: "" }));
     try {
-      await api.dashboardSummaryRecheck(scope, scope === "route" ? item.route : undefined);
+      const response = await api.dashboardSummaryRecheck(scope, scope === "route" ? item.route : undefined);
+      if (response.ok !== true) throw new Error("Dashboard recheck was not confirmed");
       if (mounted.current) setNotes(current => ({ ...current, [identity]: "Проверка запрошена; карточка не отправлялась повторно." }));
       await readStatuses([ref], currentRevision.current, false);
     } catch {

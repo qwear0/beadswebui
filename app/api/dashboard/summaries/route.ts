@@ -37,7 +37,7 @@ async function readBody(request: Request): Promise<unknown> {
 export async function POST(request: Request) {
   try {
     const result = await dashboardSummaryAction(await readBody(request));
-    return Response.json({ items: result.items }, { status: result.status, headers: noStore });
+    return Response.json("ok" in result ? { ok: result.ok } : { items: result.items }, { status: result.status, headers: noStore });
   } catch (error) {
     if (error instanceof ZodError || error instanceof SyntaxError || error instanceof RangeError) {
       return Response.json({ error: "Invalid input", code: "invalid_input" }, { status: 400, headers: noStore });
