@@ -415,8 +415,8 @@ def set_circuit(conn: sqlite3.Connection, scope: str, route: str = "", **fields:
     conn.execute(
         "INSERT INTO circuits(scope,route,hard_blocked,open_until,transient_count,probe_required,probe_token,backoff_count,reason,updated_at) "
         "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope,route) DO UPDATE SET "
-        "hard_blocked=excluded.hard_blocked,open_until=excluded.open_until,transient_count=excluded.transient_count," 
-        "probe_required=excluded.probe_required,probe_token=excluded.probe_token,backoff_count=excluded.backoff_count," 
+        "hard_blocked=excluded.hard_blocked,open_until=excluded.open_until,transient_count=excluded.transient_count,"
+        "probe_required=excluded.probe_required,probe_token=excluded.probe_token,backoff_count=excluded.backoff_count,"
         "reason=excluded.reason,updated_at=excluded.updated_at",
         (scope, route, values["hard_blocked"], values["open_until"], values["transient_count"], values["probe_required"],
          values["probe_token"], values["backoff_count"], values["reason"], values["updated_at"]),
