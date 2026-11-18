@@ -33,7 +33,7 @@
 - entrypoint: `scripts/serve.mjs` — supervised server with update restart handling.
 - entrypoint: `build.sh` — guarded local deployment to the existing user systemd service; see operations for downtime and background agent usage.
 - code: `package.json` and `package-lock.json` — scripts, dependency declarations, and pinned dependency tree.
-- code: `next.config.ts` and `Dockerfile` — build configuration and opt-in standalone container output.
+- code: `next.config.ts`, `.dockerignore`, and `Dockerfile` — build configuration and opt-in standalone container output; the image retains/copies `scripts/dashboard-queue.py`, invoked by the durable queue.
 - contract: `lib/schema.ts` — Beads and mutation schemas; `lib/api-client.ts` — browser API shapes.
 - contract: `lib/store.ts` — store interface/selection; `lib/bd.ts` — local CLI adapter; `lib/demo-store.ts` — in-memory demo store.
 - contract: `lib/agent-protocol.ts` — sanitized browser agent/mail shapes; `lib/agent-projection.ts` reads the external local protocol without importing the Pi runtime.
@@ -47,7 +47,7 @@
 - zone: `lib/beads-watch.ts` and `lib/sse-registry.ts` own server stream notification/lifecycle; `hooks/use-beads-stream.ts` owns browser invalidation.
 - zone: `lib/agent-watch.ts`, `lib/agent-api.ts`, `app/api/agents/`, and project agent routes own one shared read-only agent projection/stream. `hooks/use-agents.ts` keeps presence/history queries separate from Beads; agent components and `hooks/use-agent-filters.ts` own the browser surface.
 - owner-rule: The existing external `pi_quality_runtime` extension owns identity, stable Herdr-derived Beads names, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
-- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns separate AI Assist integration. Dashboard activity/source resolution and settings/admission are in `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts`; `lib/dashboard-queue.ts` and `scripts/dashboard-queue.py` own the app's durable SQLite queue, and `lib/dashboard-worker.ts` plus `app/api/dashboard/worker/route.ts` own private worker auth/HTTP wiring. External executor deployment is operational architecture, not another app service.
+- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns separate AI Assist integration. Dashboard activity/source resolution and settings/admission are in `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts`; `lib/dashboard-queue.ts` and `scripts/dashboard-queue.py` own the app's durable SQLite queue, and `lib/dashboard-worker.ts` plus `app/api/dashboard/worker/route.ts` own private worker auth/HTTP wiring. `automation/Dockerfile` and `automation/beadswebui_automation/` contain the isolated external executor source; it is operational architecture, not another app service.
 - zone: `lib/update-service.ts`, `lib/self-update.ts`, and `lib/update-types.ts` own update coordination and contracts.
 - zone: `lib/themes.ts`, `components/theme-provider.tsx`, and `app/globals.css` own theme registry, selection, and palettes.
 - zone: `public/` holds static assets; `design/` holds reference exports, not current runtime implementation.

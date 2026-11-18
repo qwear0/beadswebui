@@ -54,7 +54,7 @@ Launcher/build contracts:
 - `scripts/serve.mjs`: starts Next with `PORT`/`HOST`, sets `BMUS_SUPERVISED`, and relaunches on the update restart exit code 75. Signal handling waits for child exit. No test command override is supported.
 - `bin/bead-me-up-scotty.mjs`: packaged command-line launcher; consult it before changing install/start behavior.
 - `next.config.ts`: standalone output is opt-in through `NEXT_STANDALONE`; normal local launchers use Next start.
-- `Dockerfile`: enables standalone output for the container, supplies the Beads binary, and copies a separate Eleventy dependency tree for publishing. Local launch mode and container mode must not be conflated.
+- `Dockerfile`: enables standalone output for the container, supplies the Beads binary, copies the exact `scripts/dashboard-queue.py` runtime subprocess target and a separate Eleventy dependency tree for publishing. `.dockerignore` retains that one script while excluding other scripts. Local launch mode and container mode must not be conflated.
 
 ## 5. Verification and failure clues
 

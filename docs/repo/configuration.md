@@ -34,7 +34,7 @@
 | --- | --- | --- |
 | Project registry, actor/allowlist, polling interval, gamification flag, board order | `config.json` in the app config directory | `lib/config.ts` |
 | Dashboard model, reasoning effort, and prompt | Separate `dashboard.json` in the app config directory | `lib/dashboard-settings.ts`; [Dashboard](dashboard.md) |
-| Dashboard consumer credential | Server environment or restricted `neuro-gate-token` file in the app config directory | Operator provisioning; never returned in settings |
+| Dashboard worker API credential | `SCOTTY_DASHBOARD_WORKER_TOKEN` or restricted `SCOTTY_DASHBOARD_WORKER_TOKEN_FILE`; admission also requires the explicit durable-admission flag | App private worker API; never returned in settings |
 | Legacy Dashboard v2 descriptions | `bead-me-up-scotty/dashboard-summaries` under `XDG_CACHE_HOME` (default `~/.cache`) | `lib/dashboard-summaries.ts`; read-only compatibility cache |
 | Durable Dashboard queue | `bead-me-up-scotty/dashboard-queue.sqlite3` under `XDG_STATE_HOME` (default `~/.local/state`); `BMUS_DASHBOARD_QUEUE_STATE_DIR` overrides the state base | `scripts/dashboard-queue.py`; authoritative accepted-work/status store, private SQLite/WAL |
 | Issues, dependencies, comments, workflow state | Selected repository's `.beads` data, accessed through `bd` | `lib/bd.ts` |
@@ -69,12 +69,11 @@
 | `SCOTTY_ALLOWED_HOSTS` | Comma-separated allowed hostnames; see [operations](operations.md) before exposing the server. |
 | `SCOTTY_LANE_PREFIX` | Optional Focus-view label prefix, for example `ctx:`. |
 | `CLAUDE_BIN` | Optional AI-assist executable; default `claude`. |
-| `NEURO_GATE_URL` | Server-side Dashboard inference base; default `http://127.0.0.1:8080/v1`. |
-| `NEURO_GATE_TOKEN`, `NEURO_GATE_TOKEN_FILE` | Dashboard consumer token or restricted token file; no browser credential fields. See [Dashboard](dashboard.md). |
+| `NEURO_GATE_URL` | Isolated Dashboard worker's inference base; default `http://127.0.0.1:8080/v1`. The worker appends `/chat/completions`. |
+| `NEURO_GATE_TOKEN`, `NEURO_GATE_TOKEN_FILE` | Isolated worker's provider-consumer token or restricted file; only the worker consumes it. See [Dashboard](dashboard.md). |
 | `SCOTTY_DASHBOARD_DURABLE_ADMISSION` | Must be `1` to enable durable summary admission; keep off until preflight and stage evidence. |
 | `SCOTTY_DASHBOARD_WORKER_TOKEN`, `SCOTTY_DASHBOARD_WORKER_TOKEN_FILE` | Private worker API bearer token or token file; never expose to browser. |
-| `SCOTTY_DASHBOARD_WORKER_URL` | Worker-side URL for the app's private Dashboard worker API; network access must remain restricted. |
-| `NEURO_GATE_URL`, `NEURO_GATE_TOKEN_FILE` | Executor-side Neuro-gate endpoint and restricted consumer token file; coordinate with app-side provider config. |
+| `SCOTTY_DASHBOARD_WORKER_URL` | Worker-side app base URL; the worker appends `/api/dashboard/worker`. Network access must remain restricted. |
 | `XDG_CACHE_HOME` | Base directory for legacy read-only Dashboard v2 descriptions; default `~/.cache`. |
 | `XDG_STATE_HOME` | Base directory for durable Dashboard SQLite queue state; default `~/.local/state`. |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | Usage-statistics ingestion settings; an explicitly empty key disables sending. |

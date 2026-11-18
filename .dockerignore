@@ -17,8 +17,9 @@ docs/
 *.md
 LICENSE
 
-# Scripts and global launcher — not needed in container (we run server.js directly)
-scripts/
+# Global launcher is not needed in the container; retain the standalone queue subprocess.
+scripts/*
+!scripts/dashboard-queue.py
 bin/
 
 # Misc

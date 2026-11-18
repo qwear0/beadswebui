@@ -78,6 +78,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 RUN rm -rf ./node_modules/@11ty
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+# The queue is invoked by filename at runtime; ensure the exact subprocess target
+# is present even though standalone tracing/package includes are configured.
+RUN mkdir -p ./scripts
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/dashboard-queue.py ./scripts/dashboard-queue.py
 
 # Copy the prebuilt bd CLI into the image
 COPY --from=bd --chown=nextjs:nodejs /usr/local/bin/bd /usr/local/bin/bd
