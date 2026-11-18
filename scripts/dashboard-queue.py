@@ -991,7 +991,27 @@ def handle_claim(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
     for row in rows[1:]:
         available = {item["route"] for item in route_candidates(conn, row, now, active)}
         candidates = {route: choice for route, choice in candidates.items() if route in available}
-    selected = choose_route(conn, list(candidates.values()))
+    reserved_routes: dict[str, int] = {}
+    for other in conn.execute("SELECT route,items_json FROM invitations WHERE expires_at>? AND route IS NOT NULL", (now,)):
+        other_rows = [queue_row(conn, ident) for ident in json.loads(other["items_json"])]
+        if not other_rows or any(item is None or item["state"] != "queued" or int(item["retry_at"]) > now
+                                 for item in other_rows):
+            continue
+        if any(other_rows[0]["settings_json"] != item["settings_json"] or item["single_only"]
+               for item in other_rows[1:]) or (other_rows[0]["single_only"] and len(other_rows) > 1):
+            continue
+        feasible = {item["route"] for item in route_candidates(conn, other_rows[0], now, active)}
+        for item in other_rows[1:]:
+            feasible.intersection_update(choice["route"] for choice in route_candidates(conn, item, now, active))
+        if other["route"] in feasible:
+            reserved_routes[other["route"]] = reserved_routes.get(other["route"], 0) + 1
+    preferred = invitation["route"]
+    if (preferred in candidates and free_slots(preferred, active) > reserved_routes.get(preferred, 0)):
+        selected = candidates[preferred]
+    else:
+        fallback = [item for route, item in candidates.items()
+                    if free_slots(route, active) > reserved_routes.get(route, 0)]
+        selected = choose_route(conn, fallback)
     if selected is None or selected["route"] not in candidates:
         return {"claim": None}
     # Recheck capacity and circuit probe ownership under BEGIN IMMEDIATE.
@@ -1103,8 +1123,13 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
     elif "route_transient" in kinds:
         route_retry_at, _ = record_route_transient(conn, route, now, route_hint, attempt)
     elif ((route_response and not shared_error) or any(item["kind"] == "result" for item in outcomes)) and circuit_can_change(conn, attempt, "route"):
-        set_circuit(conn, "route", route, hard_blocked=0, open_until=0, transient_count=0,
-                    probe_required=0, probe_token=None, backoff_count=0, reason=None, transient_base_generation=None)
+        current_route_circuit = get_circuit(conn, "route", route)
+        if current_route_circuit and (current_route_circuit["hard_blocked"] or current_route_circuit["open_until"]
+                                      or current_route_circuit["transient_count"] or current_route_circuit["probe_required"]
+                                      or current_route_circuit["probe_token"] or current_route_circuit["backoff_count"]
+                                      or current_route_circuit["reason"]):
+            set_circuit(conn, "route", route, hard_blocked=0, open_until=0, transient_count=0,
+                        probe_required=0, probe_token=None, backoff_count=0, reason=None, transient_base_generation=None)
     for outcome in outcomes:
         ident = outcome["id"]
         row = rows[ident]
