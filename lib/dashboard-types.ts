@@ -41,6 +41,21 @@ export const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings & { peerModel: string
 };
 
 export interface DashboardEventRef { key: string; id: string }
+/** Validate opaque event IDs without changing their exact spelling. */
+export function isDashboardEventId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 1024 || value.includes("\0")) return false;
+  for (let index = 0; index < value.length; index++) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
+      index++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
 export function dashboardSummaryIdentity(ref: DashboardEventRef): string {
   return JSON.stringify([ref.key, ref.id]);
 }

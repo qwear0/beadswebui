@@ -1,5 +1,6 @@
 import { ZodError, z } from "zod";
-import { isDashboardEventId, summarySources, DashboardSourceError } from "@/lib/dashboard-activity";
+import { summarySources, DashboardSourceError } from "@/lib/dashboard-activity";
+import { isDashboardEventId } from "@/lib/dashboard-types";
 import {
   authorizeDashboardWorker,
   callDashboardQueue,

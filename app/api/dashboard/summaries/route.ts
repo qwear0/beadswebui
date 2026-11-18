@@ -3,7 +3,7 @@ import { dashboardSummaryAction, DashboardSummaryUnavailable } from "@/lib/dashb
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
 const noStore = { "Cache-Control": "no-store" };
 
 async function readBody(request: Request): Promise<unknown> {

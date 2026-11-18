@@ -8,7 +8,7 @@ import { useDashboardActivity, useDashboardSettings, useDashboardSummaries } fro
 import { AgentTopology } from "@/components/agent-topology";
 import { DashboardSettingsDialog } from "@/components/dashboard-settings";
 import { DashboardEventDetail } from "@/components/dashboard-event-detail";
-import { compareDashboardEvents, dashboardSummaryIdentity, type DashboardEvent, type DashboardEventRef, type DashboardSummaryItem } from "@/lib/dashboard-types";
+import { compareDashboardEvents, dashboardSummaryIdentity, isDashboardEventId, type DashboardEvent, type DashboardEventRef, type DashboardSummaryItem } from "@/lib/dashboard-types";
 
 export function Dashboard() {
   const agents = useAgents();
@@ -94,7 +94,7 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
   const [nearViewport, setNearViewport] = React.useState<{ ref: DashboardEventRef; priority: "visible" | "prefetch" }[]>([]);
   const byId = new Map<string, DashboardEvent>();
   for (const page of query.data?.pages ?? []) for (const item of page.items) if (!byId.has(item.id)) byId.set(item.id, item);
-  const items = [...byId.values()].sort(compareDashboardEvents);
+  const items = [...byId.values()].filter(item => isDashboardEventId(item.id)).sort(compareDashboardEvents);
   const displayed = items.slice(0, limit);
   const signature = displayed.map(item => `${item.key}:${item.id}`).join("/");
   const { descriptions, checkStatus, retry, retryAdmission, recheck } = useDashboardSummaries(nearViewport, query.dataUpdatedAt);
@@ -124,7 +124,7 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
       for (const entry of entries) {
         const ref = readRef(entry.target);
         const identity = dashboardSummaryIdentity(ref);
-        if (entry.isIntersecting && entry.intersectionRatio > 0) visible.set(identity, ref);
+        if (entry.isIntersecting) visible.set(identity, ref);
         else visible.delete(identity);
       }
       publish();
@@ -172,7 +172,7 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
       const summary = status?.state === "done" ? status.text : undefined;
       const retrySeconds = Math.max(0, Math.ceil(((status?.retryAt ?? 0) - now) / 1000));
       const reason = dashboardReasonText(status?.reason);
-      const canReplay = !!status?.replayable && !(status.state === "not_accepted" && status.reason === "capacity") && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
+      const canReplay = !description?.uncertain && !!status?.replayable && !(status.state === "not_accepted" && status.reason === "capacity") && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
       const recheckScope = status?.scope ?? (status?.reason === "route_blocked" ? "route" : status?.reason === "shared_blocked" ? "shared" : undefined);
       const canRecheck = status?.state === "blocked" && (recheckScope === "shared" || (recheckScope === "route" && !!status.route));
       return <li key={item.id} data-event-key={item.key} data-event-id={item.id}>
@@ -190,7 +190,8 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
           {status && (status.route || status.model || status.scope) && <span className="mt-1 block text-[11px] text-muted-foreground">{status.route ? `Маршрут: ${status.route}` : status.scope === "shared" ? "Маршрут: общий" : "Маршрут: scoped"}{status.model ? ` · Модель: ${status.model}` : ""}</span>}
         </span>
       </button>
-      {!summary && description?.error && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description.checking ? "Проверка…" : "Проверить состояние"}</button>}
+      {!summary && (description?.error || description?.uncertain) && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description.checking ? "Проверка…" : "Проверить состояние"}</button>}
+      {!summary && description?.uncertain && <span role="status" className="mt-1 block text-xs text-destructive">Результат повтора не подтверждён. Автоматическая повторная отправка отключена; проверьте состояние.</span>}
       {!summary && status?.state === "not_accepted" && status.reason === "capacity" && <button type="button" disabled={description?.checking} onClick={() => retryAdmission(ref, status)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Отправка…" : "Повторить запрос в очередь"}</button>}
       {!summary && canReplay && <button type="button" disabled={description?.checking} onClick={() => retry(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Повтор…" : "Повторить обработку"}</button>}
       {!summary && canRecheck && <button type="button" disabled={description?.rechecking} onClick={() => recheck(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.rechecking ? "Проверка…" : `Перепроверить ${recheckScope === "route" ? "маршрут" : "общий исполнитель"}`}</button>}

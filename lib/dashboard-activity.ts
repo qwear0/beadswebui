@@ -4,7 +4,7 @@ import { readDashboardBeadComments, readDashboardBeads } from "./bd";
 import { buildActivity, readInteractionsStrict, type ActivityItem, type RawInteraction } from "./interactions";
 import type { Bead } from "./schema";
 import { AgentReadError, canonicalStateRoot, digest, directory, readHistory, readMessage, readPresence, MESSAGE, type Registry } from "./agent-projection";
-import { compareDashboardEvents, type DashboardActivityResponse, type DashboardEvent, type DashboardEventRef } from "./dashboard-types";
+import { compareDashboardEvents, isDashboardEventId, type DashboardActivityResponse, type DashboardEvent, type DashboardEventRef } from "./dashboard-types";
 import type { AgentMessage, AgentSnapshot } from "./agent-protocol";
 
 type EventDraft = Omit<Extract<DashboardEvent, { source: "bead" }>, "key"> | Omit<Extract<DashboardEvent, { source: "message" }>, "key">;
@@ -14,21 +14,6 @@ const SOURCE_OBSOLETE_MESSAGE = "Событие изменилось или бо
 const SOURCE_RETRY_MESSAGE = "Источник события временно недоступен. Повторите запрос.";
 const DASHBOARD_SOURCE_BATCH_LIMIT = 40;
 
-/** Validate opaque dashboard feed identities without changing their exact spelling. */
-export function isDashboardEventId(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 1 || value.length > 1024 || value.includes("\0")) return false;
-  for (let index = 0; index < value.length; index++) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
-      index++;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
-}
 
 export class DashboardSourceError extends Error {
   constructor(public readonly code: SourceCode) {
@@ -358,5 +343,5 @@ export async function dashboardActivity(cursor?: string | null): Promise<Dashboa
     errors.push("История сообщений агентов недоступна.");
   }
   items.sort(compareDashboardEvents);
-  return { items, nextCursor, errors };
+  return { items: items.filter(item => isDashboardEventId(item.id)), nextCursor, errors };
 }
