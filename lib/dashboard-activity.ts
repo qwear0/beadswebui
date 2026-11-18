@@ -14,6 +14,22 @@ const SOURCE_OBSOLETE_MESSAGE = "Событие изменилось или бо
 const SOURCE_RETRY_MESSAGE = "Источник события временно недоступен. Повторите запрос.";
 const DASHBOARD_SOURCE_BATCH_LIMIT = 40;
 
+/** Validate opaque dashboard feed identities without changing their exact spelling. */
+export function isDashboardEventId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 1024 || value.includes("\0")) return false;
+  for (let index = 0; index < value.length; index++) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
+      index++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export class DashboardSourceError extends Error {
   constructor(public readonly code: SourceCode) {
     super(code === "source_obsolete" ? SOURCE_OBSOLETE_MESSAGE : SOURCE_RETRY_MESSAGE);
@@ -280,7 +296,7 @@ export async function summarySources(refs: DashboardEventRef[]): Promise<Map<str
       results.set(ref.key, { code: "source_obsolete" });
       continue;
     }
-    if (typeof ref.id !== "string" || !ref.id || ref.id.length > 1024) {
+    if (!isDashboardEventId(ref.id)) {
       unique.set(ref.key, null);
       continue;
     }

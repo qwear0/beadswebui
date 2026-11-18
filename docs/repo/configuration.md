@@ -69,9 +69,9 @@
 | `SCOTTY_ALLOWED_HOSTS` | Comma-separated allowed hostnames; see [operations](operations.md) before exposing the server. |
 | `SCOTTY_LANE_PREFIX` | Optional Focus-view label prefix, for example `ctx:`. |
 | `CLAUDE_BIN` | Optional AI-assist executable; default `claude`. |
-| `NEURO_GATE_URL` | Isolated Dashboard worker's inference base; default `http://127.0.0.1:8080/v1`. The worker appends `/chat/completions`. |
-| `NEURO_GATE_TOKEN`, `NEURO_GATE_TOKEN_FILE` | Isolated worker's provider-consumer token or restricted file; only the worker consumes it. See [Dashboard](dashboard.md). |
-| `SCOTTY_DASHBOARD_DURABLE_ADMISSION` | Must be `1` to enable durable summary admission; keep off until preflight and stage evidence. |
+| `NEURO_GATE_URL` | Required isolated Dashboard worker inference base ending in `/v1`; there is no source default. The worker appends `/chat/completions`. |
+| `NEURO_GATE_TOKEN`, `NEURO_GATE_TOKEN_FILE` | Explicitly configure the worker consumer credential as an environment token or a worker-readable UTF-8 token file (maximum 8 KiB); there is no bundled/default token or file path. Only the worker consumes it. See [Dashboard](dashboard.md). |
+| `SCOTTY_DASHBOARD_DURABLE_ADMISSION` | Must be `1` to enable durable summary admission; keep off until worker/gateway configuration and deployment health preconditions are confirmed. |
 | `SCOTTY_DASHBOARD_WORKER_TOKEN`, `SCOTTY_DASHBOARD_WORKER_TOKEN_FILE` | Private worker API bearer token or token file; never expose to browser. |
 | `SCOTTY_DASHBOARD_WORKER_URL` | Worker-side app base URL; the worker appends `/api/dashboard/worker`. Network access must remain restricted. |
 | `XDG_CACHE_HOME` | Base directory for legacy read-only Dashboard v2 descriptions; default `~/.cache`. |

@@ -1,5 +1,5 @@
 import { ZodError, z } from "zod";
-import { summarySources, DashboardSourceError } from "@/lib/dashboard-activity";
+import { isDashboardEventId, summarySources, DashboardSourceError } from "@/lib/dashboard-activity";
 import {
   authorizeDashboardWorker,
   callDashboardQueue,
@@ -11,16 +11,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 const MAX_BODY_BYTES = 1024 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
-const PROJECT = /^[a-z0-9][a-z0-9-]{0,127}$/;
-const MESSAGE = /^msg_[0-9]{13}_[a-f0-9]{32}$/;
-const eventId = new RegExp(`^(?:${MESSAGE.source.slice(1, -1)}|${PROJECT.source.slice(1, -1)}\\/[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,895})$`);
 const tokenSchema = z.string().length(32).regex(/^[a-f0-9]{32}$/);
 const MAX_BATCH = 4;
 const MAX_INVITATIONS = 6;
 const MAX_TEXT = 8_000;
 // Match Python str.strip(), including its extra ASCII separators but not BOM.
 const nonWhitespace = /[^\p{White_Space}\u001c-\u001f]/u;
-const refSchema = z.object({ id: z.string().min(1).max(1024).regex(eventId), key: z.string().regex(SHA256) }).strict();
+const refSchema = z.object({ id: z.string().refine(isDashboardEventId), key: z.string().regex(SHA256) }).strict();
 const modelSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:/-]+$/);
 const executorSettingsSchema = z.object({
   providers: z.array(modelSchema).min(1).max(2).refine(providers => new Set(providers).size === providers.length && providers.every((provider, index) => index === 0 || providers[index - 1] < provider)),
@@ -91,13 +88,9 @@ function validateClaim(value: unknown) {
   const claim = parsed.data.claim;
   if (claim) {
     const ids = new Set<string>();
-    const keys = new Map<string, string>();
     for (const item of claim.items) {
       if (!item.settings.providers.includes(claim.route) || item.id !== dashboardGenerationDigest(item.ref.key, item.settings) || ids.has(item.id)) throw new WorkerUnavailable();
-      const previousId = keys.get(item.ref.key);
-      if (previousId !== undefined && previousId !== item.ref.id) throw new WorkerUnavailable();
       ids.add(item.id);
-      keys.set(item.ref.key, item.ref.id);
     }
   }
   return parsed.data.claim;
@@ -120,10 +113,20 @@ function sourceCode(value: unknown): "source_obsolete" | "source_retry" | null {
 
 async function resolveSources(claim: NonNullable<ReturnType<typeof validateClaim>>) {
   try {
-    const refs = uniqueClaimRefs(claim.items);
+    const idByKey = new Map<string, string>();
+    const conflictingKeys = new Set<string>();
+    for (const item of claim.items) {
+      const previousId = idByKey.get(item.ref.key);
+      if (previousId !== undefined && previousId !== item.ref.id) conflictingKeys.add(item.ref.key);
+      else idByKey.set(item.ref.key, item.ref.id);
+    }
+    const refs = uniqueClaimRefs(claim.items.filter(item => !conflictingKeys.has(item.ref.key)));
     const resolved = await summarySources(refs);
     if (!(resolved instanceof Map)) throw new WorkerUnavailable();
     return claim.items.map(item => {
+      if (conflictingKeys.has(item.ref.key)) {
+        return { ...item, outcome: { id: item.id, kind: "obsolete" as const, reason: "source_obsolete" } };
+      }
       const value = resolved.get(item.ref.key);
       if (value === undefined) throw new WorkerUnavailable();
       const code = sourceCode(value);
@@ -192,7 +195,7 @@ export async function POST(request: Request) {
 
     const firstRaw: unknown = await callDashboardQueue("resolve", { token: input.token });
     const first = validateClaim(firstRaw);
-    if (!first || first.token !== input.token) return Response.json({ claim: null }, { headers: noStore });
+    if (!first || first.token !== input.token || first.deadlineAt <= Date.now()) return Response.json({ claim: null }, { headers: noStore });
     const items = await resolveSources(first);
     const secondRaw: unknown = await callDashboardQueue("resolve", { token: input.token });
     const second = validateClaim(secondRaw);

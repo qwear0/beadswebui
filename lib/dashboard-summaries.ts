@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { digest as digestLegacy } from "./agent-projection";
-import { summarySources, DashboardSourceError } from "./dashboard-activity";
+import { isDashboardEventId, summarySources, DashboardSourceError } from "./dashboard-activity";
 import { getDashboardSettings } from "./dashboard-settings";
 import { DashboardQueueError } from "./dashboard-queue";
 import type { DashboardEventRef, DashboardSettings } from "./dashboard-types";
@@ -18,10 +18,7 @@ import {
 } from "./dashboard-worker";
 
 const SHA256 = /^[a-f0-9]{64}$/;
-const PROJECT = /^[a-z0-9][a-z0-9-]{0,127}$/;
-const MESSAGE = /^msg_[0-9]{13}_[a-f0-9]{32}$/;
-const eventId = new RegExp(`^(?:${MESSAGE.source.slice(1, -1)}|${PROJECT.source.slice(1, -1)}\\/[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,895})$`);
-const refSchema = z.object({ id: z.string().min(1).max(1024).regex(eventId), key: z.string().regex(SHA256) }).strict();
+const refSchema = z.object({ id: z.string().refine(isDashboardEventId), key: z.string().regex(SHA256) }).strict();
 const statusRefList = z.array(refSchema.extend({ generation: z.string().regex(SHA256).optional() })).min(1).max(40);
 const browserRequestSchema = z.union([
   z.object({
@@ -56,6 +53,8 @@ const statusItemsSchema = z.object({ items: z.array(queueItemSchema.extend({
   requestId: z.string().regex(SHA256).optional(),
   retainedSettings: retainedSettingsSchema.optional(),
 })).max(40) }).strict();
+const MAX_LEGACY_CACHE_TEXT_UNITS = 16_384;
+const MAX_LEGACY_CACHE_JSON_BYTES = 6 * MAX_LEGACY_CACHE_TEXT_UNITS + 2;
 
 export class DashboardSummaryUnavailable extends Error {
   constructor() { super("Dashboard summary service is temporarily unavailable"); this.name = "DashboardSummaryUnavailable"; }
@@ -63,16 +62,23 @@ export class DashboardSummaryUnavailable extends Error {
 
 export type DashboardSummaryActionResult = { items: Record<string, QueueItem>; status: 200 | 202 } | { ok: true; status: 200 };
 
-function uniqueRefs(refs: DashboardEventRef[]): DashboardEventRef[] {
+function uniqueRefs(refs: DashboardEventRef[]) {
   const pairs = new Map<string, DashboardEventRef>();
   const byKey = new Map<string, string>();
+  const conflictingKeys = new Set<string>();
   for (const ref of refs) {
     const previousId = byKey.get(ref.key);
-    if (previousId !== undefined && previousId !== ref.id) throw new z.ZodError([]);
+    if (previousId !== undefined && previousId !== ref.id) {
+      conflictingKeys.add(ref.key);
+      continue;
+    }
     byKey.set(ref.key, ref.id);
     pairs.set(`${ref.key}\n${ref.id}`, ref);
   }
-  return [...pairs.values()];
+  return {
+    refs: [...pairs.values()].filter(ref => !conflictingKeys.has(ref.key)),
+    conflictingKeys,
+  };
 }
 
 function parseQueueItems(value: unknown): QueueItem[] {
@@ -164,9 +170,7 @@ function sourceFailure(item: QueueItem | undefined, code: "source_obsolete" | "s
   if (item && item.state !== "not_accepted") {
     const preserved = { ...item };
     delete preserved.text;
-    return item.state === "done"
-      ? { id: item.id, state: "retrying", reason: code, retryAt: Date.now() + 5_000 }
-      : { ...preserved, reason: code };
+    return { ...preserved, reason: code };
   }
   return { ...(item?.id ? { id: item.id } : {}), state: "not_accepted", reason: code, retryAt: Date.now() + 5_000 };
 }
@@ -183,10 +187,10 @@ async function readLegacyCache(key: string, settings: DashboardSettings, executo
     try {
       handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
       const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size < 2 || stat.size > 16384) continue;
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size < 2 || stat.size > MAX_LEGACY_CACHE_JSON_BYTES) continue;
       const raw = await handle.readFile("utf8");
       const value: unknown = JSON.parse(raw);
-      if (typeof value === "string" && value.trim().length > 0 && value.length <= 16384 && !value.includes("\0")) {
+      if (typeof value === "string" && value.trim().length > 0 && value.length <= MAX_LEGACY_CACHE_TEXT_UNITS && !value.includes("\0")) {
         return { state: "done", text: value, model };
       }
     } catch (error) {
@@ -222,12 +226,14 @@ export async function dashboardSummaryAction(raw: unknown): Promise<DashboardSum
   }
 
   const generations = input.action === "status" ? new Map(input.refs.map(ref => [ref.key, ref.generation])) : undefined;
-  const refs = uniqueRefs(input.action === "status" ? input.refs.map(({ id, key }) => ({ id, key })) : input.entries.map(entry => entry.ref));
+  const unique = uniqueRefs(input.action === "status" ? input.refs.map(({ id, key }) => ({ id, key })) : input.entries.map(entry => entry.ref));
+  const refs = unique.refs;
   const settings = await getDashboardSettings();
   const executor = dashboardExecutorSettings(settings);
   const ids = refs.map(ref => dashboardGenerationDigest(ref.key, executor));
   const { current, retained } = await readStatus(ids, refs, generations && refs.map(ref => generations.get(ref.key) ?? null));
   const itemsByKey: Record<string, QueueItem> = {};
+  for (const key of unique.conflictingKeys) itemsByKey[key] = { state: "obsolete", reason: "source_obsolete" };
 
   if (input.action === "status") {
     const needsSource = refs.filter((_ref, index) => {
@@ -313,26 +319,23 @@ export async function dashboardSummaryAction(raw: unknown): Promise<DashboardSum
   let accepted = false;
   const returnedText: DashboardEventRef[] = [];
   try {
-    // Each prompt can escape to six bytes per UTF-16 code unit. Eight entries
-    // fit the queue's 1 MiB input cap even with maximal refs and settings.
-    for (let offset = 0; offset < admissionCandidates.length; offset += 8) {
-      const batch = admissionCandidates.slice(offset, offset + 8);
-      const result = await callDashboardQueue<unknown>("admit", {
-        entries: batch.map(({ id, ref, settings, priority }) => ({ id, ref, settings, priority })),
-        replayIds: batch.filter(candidate => candidate.replay).map(candidate => candidate.id),
-        existingIds: batch.filter(candidate => candidate.promote).map(candidate => candidate.id),
-      });
-      const queueItems = parseQueueItems(result);
-      if (queueItems.some(item => item.state !== "not_accepted" && !item.id)) throw new DashboardSummaryUnavailable();
-      const admitted = associateQueueItems(queueItems, batch.map(candidate => candidate.id), false);
-      for (const candidate of batch) {
-        const item = admitted.get(candidate.id);
-        if (!item || candidate.promote && item.state === "not_accepted") throw new DashboardSummaryUnavailable();
-        itemsByKey[candidate.ref.key] = item.state === "not_accepted" && item.reason === "queue_capacity"
-          ? { ...item, reason: "capacity" } : item;
-        accepted ||= durableAccepted(item);
-        if (item.text) returnedText.push(candidate.ref);
-      }
+    // Admit the complete candidate set in one SQLite transaction; the queue
+    // subprocess reserves a 4 MiB stdin limit for this action only.
+    const result = await callDashboardQueue<unknown>("admit", {
+      entries: admissionCandidates.map(({ id, ref, settings, priority }) => ({ id, ref, settings, priority })),
+      replayIds: admissionCandidates.filter(candidate => candidate.replay).map(candidate => candidate.id),
+      existingIds: admissionCandidates.filter(candidate => candidate.promote).map(candidate => candidate.id),
+    });
+    const queueItems = parseQueueItems(result);
+    if (queueItems.some(item => item.state !== "not_accepted" && !item.id)) throw new DashboardSummaryUnavailable();
+    const admitted = associateQueueItems(queueItems, admissionCandidates.map(candidate => candidate.id), false);
+    for (const candidate of admissionCandidates) {
+      const item = admitted.get(candidate.id);
+      if (!item || candidate.promote && item.state === "not_accepted") throw new DashboardSummaryUnavailable();
+      itemsByKey[candidate.ref.key] = item.state === "not_accepted" && item.reason === "queue_capacity"
+        ? { ...item, reason: "capacity" } : item;
+      accepted ||= durableAccepted(item);
+      if (item.text) returnedText.push(candidate.ref);
     }
   } catch {
     throw new DashboardSummaryUnavailable();
@@ -341,7 +344,14 @@ export async function dashboardSummaryAction(raw: unknown): Promise<DashboardSum
   const refreshed = await validateSources(returnedText);
   for (const ref of returnedText) {
     const source = refreshed.get(ref.key);
-    if (source !== "ok") itemsByKey[ref.key] = sourceFailure(itemsByKey[ref.key], source ?? "source_retry");
+    if (source !== "ok") {
+      const item = itemsByKey[ref.key];
+      if (item?.text) {
+        const receipt = { ...item };
+        delete receipt.text;
+        itemsByKey[ref.key] = { ...receipt, reason: source ?? "source_retry" };
+      }
+    }
   }
   return { items: itemsByKey, status: accepted ? 202 : 200 };
 }

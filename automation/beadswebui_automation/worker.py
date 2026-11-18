@@ -18,6 +18,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 
 _WORKER_TIMEOUT_SECONDS = 10.0
+_RESOLVE_TIMEOUT_SECONDS = 60.0
+_INFERENCE_HEADROOM_SECONDS = 60.0
 _MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_GATEWAY_RESPONSE_BYTES = 1024 * 1024
 _MAX_REQUEST_BYTES = 1024 * 1024
@@ -189,8 +191,13 @@ def _http_post(url: str, body: bytes, token: str, deadline: float, response_limi
     return status, headers, response_body, len(response_body) > response_limit
 
 
-def _api_post(action: str, args: dict[str, Any], deadline: float = float("inf")) -> dict[str, Any]:
-    deadline = min(deadline, time.monotonic() + _WORKER_TIMEOUT_SECONDS)
+def _api_post(
+    action: str,
+    args: dict[str, Any],
+    deadline: float = float("inf"),
+    timeout_seconds: float = _WORKER_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    deadline = min(deadline, time.monotonic() + timeout_seconds)
     try:
         url = _safe_url(os.environ.get("SCOTTY_DASHBOARD_WORKER_URL", ""), gateway=False)
         token = _read_secret("SCOTTY_DASHBOARD_WORKER_TOKEN", "SCOTTY_DASHBOARD_WORKER_TOKEN_FILE")
@@ -255,7 +262,12 @@ def _deadline(value: Any) -> int | None:
 
 
 def _safe_id(value: Any) -> bool:
-    return isinstance(value, str) and 1 <= len(value) <= 1024 and not _CONTROL.search(value)
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    try:
+        return len(value.encode("utf-16-le", errors="strict")) // 2 <= 1024
+    except UnicodeEncodeError:
+        return False
 
 
 def _parse_settings(value: Any) -> dict[str, Any] | None:
@@ -570,11 +582,17 @@ def run_invitation(invitation: str) -> None:
         finish_remaining("route_blocked", "unsupported_route")
         return
 
-    if time.monotonic() >= deadline:
-        finish_remaining("source_retry", "lease_exhausted_before_resolve")
+    # Cold Beads exports may exceed the ordinary 10-second control-call cap.
+    # Give resolution up to 60 seconds while preserving 60 seconds for inference.
+    resolve_deadline = min(deadline - _INFERENCE_HEADROOM_SECONDS, time.monotonic() + _RESOLVE_TIMEOUT_SECONDS)
+    if time.monotonic() >= resolve_deadline:
+        finish_remaining("source_retry", "resolve_headroom_reserved")
         return
     try:
-        resolved_response = _api_post("resolve", {"token": token}, deadline=deadline)
+        resolved_response = _api_post(
+            "resolve", {"token": token}, deadline=resolve_deadline,
+            timeout_seconds=_RESOLVE_TIMEOUT_SECONDS,
+        )
     except WorkerAPIError:
         finish_remaining("source_retry", "resolve_unavailable")
         return

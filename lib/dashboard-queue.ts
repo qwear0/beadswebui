@@ -86,6 +86,7 @@ export interface DashboardQueueResults {
 export type DashboardQueueAction = keyof DashboardQueueInputs;
 
 const MAX_REQUEST_BYTES = 1_048_576;
+const MAX_ADMIT_REQUEST_BYTES = 4 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 8_388_608;
 const PROCESS_TIMEOUT_MS = 15_000;
 
@@ -117,7 +118,8 @@ async function invoke(action: string, input: unknown): Promise<unknown> {
     if (typeof serialized !== "string") throw new Error();
     body = serialized;
   } catch { throw new DashboardQueueError("invalid_request"); }
-  if (Buffer.byteLength(body, "utf8") > MAX_REQUEST_BYTES) throw new DashboardQueueError("invalid_request");
+  const requestLimit = action === "admit" ? MAX_ADMIT_REQUEST_BYTES : MAX_REQUEST_BYTES;
+  if (Buffer.byteLength(body, "utf8") > requestLimit) throw new DashboardQueueError("invalid_request");
 
   const script = path.resolve(process.cwd(), "scripts", "dashboard-queue.py");
   return await new Promise((resolve, reject) => {
