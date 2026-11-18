@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-MAX_INPUT_BYTES = 1_048_576
+MAX_INPUT_BYTES = 4 * 1_048_576
 MAX_ADMIT = 200
 MAX_STATUS = 200
 MAX_OUTSTANDING = 2_000
@@ -47,7 +47,6 @@ MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PROVIDER = 200
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 PROVIDER = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
-REF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+/-]{0,1023}$")
 SAFE_REASON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 TOKEN = re.compile(r"^[a-f0-9]{32}$")
 EFFORTS = {"low", "medium", "high", "xhigh"}
@@ -81,6 +80,18 @@ def safe_string(value: Any, maximum: int, pattern: re.Pattern[str] | None = None
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
         invalid()
     if pattern and not pattern.fullmatch(value):
+        invalid()
+    return value
+
+
+def safe_ref_id(value: Any) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        invalid()
+    try:
+        code_units = len(value.encode("utf-16-le", errors="strict")) // 2
+    except UnicodeEncodeError:
+        invalid()
+    if code_units > 1024:
         invalid()
     return value
 
@@ -194,14 +205,19 @@ def connect(write: bool) -> sqlite3.Connection | None:
                 state TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 shared_probe INTEGER NOT NULL DEFAULT 0,
-                route_probe INTEGER NOT NULL DEFAULT 0
+                route_probe INTEGER NOT NULL DEFAULT 0,
+                shared_generation INTEGER NOT NULL DEFAULT 0,
+                route_generation INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(state, lease_until, route);
             CREATE TABLE IF NOT EXISTS invitations (
                 id TEXT PRIMARY KEY,
                 items_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL
+                expires_at INTEGER NOT NULL,
+                route TEXT,
+                shared_probe INTEGER NOT NULL DEFAULT 0,
+                route_probe INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS invitations_expiry_idx ON invitations(expires_at);
             CREATE TABLE IF NOT EXISTS circuits (
@@ -215,6 +231,8 @@ def connect(write: bool) -> sqlite3.Connection | None:
                 backoff_count INTEGER NOT NULL DEFAULT 0,
                 reason TEXT,
                 updated_at INTEGER NOT NULL,
+                decision_generation INTEGER NOT NULL DEFAULT 0,
+                transient_base_generation INTEGER,
                 PRIMARY KEY(scope, route)
             );
             CREATE TABLE IF NOT EXISTS item_route_failures (
@@ -237,6 +255,32 @@ def connect(write: bool) -> sqlite3.Connection | None:
             );
             """
         )
+        # Older queue files are upgraded additively; never discard rows. Legacy
+        # circuit rows receive a fresh generation so pre-upgrade attempts cannot
+        # rewrite decisions whose ordering they did not record.
+        conn.execute("BEGIN IMMEDIATE")
+        for table, column, declaration in (
+                ("attempts", "shared_generation", "INTEGER NOT NULL DEFAULT 0"),
+                ("attempts", "route_generation", "INTEGER NOT NULL DEFAULT 0"),
+                ("invitations", "route", "TEXT"),
+                ("invitations", "shared_probe", "INTEGER NOT NULL DEFAULT 0"),
+                ("invitations", "route_probe", "INTEGER NOT NULL DEFAULT 0"),
+                ("circuits", "decision_generation", "INTEGER NOT NULL DEFAULT 0"),
+                ("circuits", "transient_base_generation", "INTEGER")):
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+        migrated = conn.execute("SELECT 1 FROM queue_meta WHERE key='circuit_generation_v1'").fetchone()
+        if not migrated:
+            conn.execute("UPDATE circuits SET decision_generation=decision_generation+1,transient_base_generation=NULL")
+            conn.execute(
+                "UPDATE attempts SET shared_generation=COALESCE((SELECT decision_generation FROM circuits "
+                "WHERE scope='shared' AND route='' AND probe_token=attempts.token),0), "
+                "route_generation=COALESCE((SELECT decision_generation FROM circuits "
+                "WHERE scope='route' AND route=attempts.route AND probe_token=attempts.token),0)"
+            )
+            conn.execute("INSERT INTO queue_meta(key,value) VALUES('circuit_generation_v1','1')")
+        conn.commit()
         # SQLite creates these with the process umask. Reassert private modes
         # after connection setup in case the DB already existed with loose mode.
         for file in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
@@ -278,7 +322,7 @@ def validate_entry(value: Any) -> dict[str, Any]:
     value = exact_keys(value, {"id", "ref", "settings", "priority"})
     ident = safe_string(value["id"], 64, HEX64)
     ref = exact_keys(value["ref"], {"id", "key"})
-    ref_id = safe_string(ref["id"], 1024, REF_ID)
+    ref_id = safe_ref_id(ref["id"])
     ref_key = safe_string(ref["key"], 64, HEX64)
     settings = validate_settings(value["settings"])
     priority = value["priority"]
@@ -328,7 +372,7 @@ def validate_input(action: Any, value: Any) -> tuple[str, Any]:
             if not isinstance(refs, list) or len(refs) != len(ids):
                 invalid()
             refs = [exact_keys(ref, {"id", "key"}) for ref in refs]
-            refs = [(safe_string(ref["id"], 1024, REF_ID), safe_string(ref["key"], 64, HEX64)) for ref in refs]
+            refs = [(safe_ref_id(ref["id"]), safe_string(ref["key"], 64, HEX64)) for ref in refs]
         generations = value.get("generations")
         if generations is not None:
             if refs is None or not isinstance(generations, list) or len(generations) != len(ids):
@@ -409,17 +453,21 @@ def set_circuit(conn: sqlite3.Connection, scope: str, route: str = "", **fields:
         "probe_token": current["probe_token"] if current else None,
         "backoff_count": int(current["backoff_count"]) if current else 0,
         "reason": current["reason"] if current else None,
+        "decision_generation": int(current["decision_generation"]) + 1 if current else 1,
+        "transient_base_generation": current["transient_base_generation"] if current else None,
         "updated_at": now_ms(),
     }
     values.update(fields)
     conn.execute(
-        "INSERT INTO circuits(scope,route,hard_blocked,open_until,transient_count,probe_required,probe_token,backoff_count,reason,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope,route) DO UPDATE SET "
-        "hard_blocked=excluded.hard_blocked,open_until=excluded.open_until,transient_count=excluded.transient_count,"
-        "probe_required=excluded.probe_required,probe_token=excluded.probe_token,backoff_count=excluded.backoff_count,"
-        "reason=excluded.reason,updated_at=excluded.updated_at",
+        "INSERT INTO circuits(scope,route,hard_blocked,open_until,transient_count,probe_required,probe_token,backoff_count,"
+        "reason,updated_at,decision_generation,transient_base_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(scope,route) DO UPDATE SET hard_blocked=excluded.hard_blocked,open_until=excluded.open_until,"
+        "transient_count=excluded.transient_count,probe_required=excluded.probe_required,probe_token=excluded.probe_token,"
+        "backoff_count=excluded.backoff_count,reason=excluded.reason,updated_at=excluded.updated_at,"
+        "decision_generation=excluded.decision_generation,transient_base_generation=excluded.transient_base_generation",
         (scope, route, values["hard_blocked"], values["open_until"], values["transient_count"], values["probe_required"],
-         values["probe_token"], values["backoff_count"], values["reason"], values["updated_at"]),
+         values["probe_token"], values["backoff_count"], values["reason"], values["updated_at"],
+         values["decision_generation"], values["transient_base_generation"]),
     )
 
 
@@ -432,30 +480,74 @@ def item_backoff(retry_count: int) -> int:
     return jittered(min(MAX_BACKOFF_MS, 15_000 * (2 ** min(max(retry_count, 0), 6))))
 
 
-def record_route_transient(conn: sqlite3.Connection, route: str, now: int, retry_after: int = 0) -> tuple[int, bool]:
+def attempt_generation(attempt: sqlite3.Row, scope: str) -> int:
+    return int(attempt[f"{scope}_generation"])
+
+
+def circuit_owned_by_attempt(circuit: sqlite3.Row | None, attempt: sqlite3.Row, scope: str) -> bool:
+    return bool(attempt[f"{scope}_probe"] and circuit and circuit["probe_token"] == attempt["token"])
+
+
+def circuit_can_change(conn: sqlite3.Connection, attempt: sqlite3.Row, scope: str,
+                       allow_transient_merge: bool = False) -> bool:
+    circuit = get_circuit(conn, scope, attempt["route"] if scope == "route" else "")
+    if attempt[f"{scope}_probe"]:
+        return circuit_owned_by_attempt(circuit, attempt, scope)
+    expected = attempt_generation(attempt, scope)
+    generation = int(circuit["decision_generation"]) if circuit else 0
+    if generation == expected:
+        return True
+    return bool(allow_transient_merge and circuit and not circuit["hard_blocked"]
+                and circuit["transient_base_generation"] is not None
+                and int(circuit["transient_base_generation"]) == expected)
+
+
+def record_route_transient(conn: sqlite3.Connection, route: str, now: int, retry_after: int,
+                           attempt: sqlite3.Row) -> tuple[int, bool]:
     current = get_circuit(conn, "route", route)
+    if not circuit_can_change(conn, attempt, "route", allow_transient_merge=True):
+        return (int(current["open_until"]) if current else 0,
+                bool(current and current["probe_required"]))
+    expected = attempt_generation(attempt, "route")
+    generation = int(current["decision_generation"]) if current else 0
+    merging = current is not None and generation != expected
     count = int(current["transient_count"]) + 1 if current else 1
     backoff_count = int(current["backoff_count"]) if current else 0
     base = min(MAX_BACKOFF_MS, 15_000 * (2 ** min(backoff_count, 6)))
     delay = max(jittered(base), retry_after, 60_000 if count >= 2 else 0)
-    probe = count >= 2
-    set_circuit(conn, "route", route,
-                hard_blocked=0, open_until=now + delay, transient_count=count,
-                probe_required=int(probe), probe_token=None, backoff_count=min(backoff_count + 1, 6),
-                reason="route_transient")
-    return now + delay, probe
+    open_until = max(int(current["open_until"]) if current else 0, now + delay)
+    probe = bool((current and current["probe_required"]) or count >= 2)
+    # A newer transient decision invalidates any probe launched against the
+    # earlier generation, even when this report is an allowed cohort merge.
+    probe_token = None
+    transient_base = (int(current["transient_base_generation"]) if merging and current["transient_base_generation"] is not None
+                      else expected)
+    set_circuit(conn, "route", route, hard_blocked=0, open_until=open_until, transient_count=count,
+                probe_required=int(probe), probe_token=probe_token, backoff_count=min(backoff_count + 1, 6),
+                reason="route_transient", transient_base_generation=transient_base)
+    return open_until, probe
 
 
-def record_shared_transient(conn: sqlite3.Connection, now: int, retry_after: int = 0) -> int:
+def record_shared_transient(conn: sqlite3.Connection, now: int, retry_after: int,
+                            attempt: sqlite3.Row) -> int:
     current = get_circuit(conn, "shared")
+    if not circuit_can_change(conn, attempt, "shared", allow_transient_merge=True):
+        return int(current["open_until"]) if current else 0
+    expected = attempt_generation(attempt, "shared")
+    generation = int(current["decision_generation"]) if current else 0
+    merging = current is not None and generation != expected
     backoff_count = int(current["backoff_count"]) if current else 0
     base = min(MAX_BACKOFF_MS, 15_000 * (2 ** min(backoff_count, 6)))
     delay = max(jittered(base), retry_after)
-    set_circuit(conn, "shared", "", hard_blocked=0, open_until=now + delay,
+    open_until = max(int(current["open_until"]) if current else 0, now + delay)
+    probe_token = None
+    transient_base = (int(current["transient_base_generation"]) if merging and current["transient_base_generation"] is not None
+                      else expected)
+    set_circuit(conn, "shared", "", hard_blocked=0, open_until=open_until,
                 transient_count=(int(current["transient_count"]) + 1 if current else 1),
-                probe_required=1, probe_token=None, backoff_count=min(backoff_count + 1, 6),
-                reason="shared_transient")
-    return now + delay
+                probe_required=1, probe_token=probe_token, backoff_count=min(backoff_count + 1, 6),
+                reason="shared_transient", transient_base_generation=transient_base)
+    return open_until
 
 
 def prune_metadata(conn: sqlite3.Connection, now: int) -> None:
@@ -493,7 +585,7 @@ def recover_expired_attempts(conn: sqlite3.Connection, now: int) -> None:
         token = attempt["token"]
         route = attempt["route"]
         ids = json.loads(attempt["items_json"])
-        retry_at, _ = record_route_transient(conn, route, now)
+        retry_at, _ = record_route_transient(conn, route, now, 0, attempt)
         for ident in ids:
             row = conn.execute("SELECT * FROM queue_items WHERE id=? AND current_token=? AND state='running'", (ident, token)).fetchone()
             if row is None:
@@ -506,18 +598,18 @@ def recover_expired_attempts(conn: sqlite3.Connection, now: int) -> None:
             )
             conn.execute(
                 "INSERT INTO item_route_failures(item_id,route,retry_at,reason) VALUES(?,?,?,'attempt_expired') "
-                "ON CONFLICT(item_id,route) DO UPDATE SET retry_at=excluded.retry_at,reason=excluded.reason",
+                "ON CONFLICT(item_id,route) DO UPDATE SET retry_at=max(retry_at,excluded.retry_at),reason=excluded.reason",
                 (ident, route, retry_at),
             )
         if attempt["shared_probe"]:
             shared = get_circuit(conn, "shared")
-            if shared and shared["probe_token"] == token:
+            if circuit_owned_by_attempt(shared, attempt, "shared"):
+                base_generation = (int(shared["transient_base_generation"])
+                                  if shared["transient_base_generation"] is not None
+                                  else attempt_generation(attempt, "shared"))
                 set_circuit(conn, "shared", "", probe_token=None, probe_required=1,
-                            open_until=max(int(shared["open_until"]), now + item_backoff(0)), reason="shared_transient")
-        route_circuit = get_circuit(conn, "route", route)
-        if route_circuit and route_circuit["probe_token"] == token:
-            set_circuit(conn, "route", route, probe_token=None, probe_required=1,
-                        open_until=max(int(route_circuit["open_until"]), retry_at), reason="route_transient")
+                            open_until=max(int(shared["open_until"]), now + item_backoff(0)), reason="shared_transient",
+                            transient_base_generation=base_generation)
         conn.execute("UPDATE attempts SET state='expired' WHERE token=?", (token,))
 
 
@@ -580,15 +672,18 @@ def route_state(conn: sqlite3.Connection, route: str, now: int) -> tuple[bool, i
 
 
 def route_candidates(conn: sqlite3.Connection, row: sqlite3.Row, now: int,
-                     active: dict[str | None, int] | None = None) -> list[dict[str, Any]]:
+                     active: dict[str | None, int] | None = None,
+                     reserved_shared_probe: bool = False,
+                     reserved_route_probes: set[str] | None = None,
+                     reserve_unbound_probe: bool = False) -> list[dict[str, Any]]:
     shared_ok, _, shared_probe, _ = shared_route_state(conn, now)
-    if not shared_ok:
+    if not shared_ok or (shared_probe and reserved_shared_probe):
         return []
     settings = json.loads(row["settings_json"])
     candidates = []
     for route in settings["providers"]:
         ok, _, probe, _ = route_state(conn, route, now)
-        if not ok:
+        if not ok or (probe and (reserve_unbound_probe or route in (reserved_route_probes or set()))):
             continue
         failure = conn.execute("SELECT retry_at FROM item_route_failures WHERE item_id=? AND route=?", (row["id"], route)).fetchone()
         if failure and int(failure["retry_at"]) > now:
@@ -625,11 +720,16 @@ def ordered_queued(conn: sqlite3.Connection, now: int, excluded: set[str]) -> li
     return [row for row in sorted(rows, key=key) if row["id"] not in excluded]
 
 
-def make_plan(conn: sqlite3.Connection, now: int, excluded: set[str]) -> tuple[list[sqlite3.Row], str, bool, bool] | None:
-    active = active_counts(conn, now)
+def make_plan(conn: sqlite3.Connection, now: int, excluded: set[str],
+              active: dict[str | None, int] | None = None,
+              reserved_shared_probe: bool = False,
+              reserved_route_probes: set[str] | None = None,
+              reserve_unbound_probe: bool = False) -> tuple[list[sqlite3.Row], str, bool, bool] | None:
+    active = active_counts(conn, now) if active is None else active
     ordered = ordered_queued(conn, now, excluded)
     for index, first in enumerate(ordered):
-        candidates = route_candidates(conn, first, now, active)
+        candidates = route_candidates(conn, first, now, active, reserved_shared_probe,
+                                      reserved_route_probes, reserve_unbound_probe)
         selected = choose_route(conn, candidates)
         if selected is None:
             continue
@@ -638,7 +738,8 @@ def make_plan(conn: sqlite3.Connection, now: int, excluded: set[str]) -> tuple[l
             for row in ordered[index + 1:]:
                 if row["single_only"] or row["settings_json"] != first["settings_json"]:
                     continue
-                options = {item["route"]: item for item in route_candidates(conn, row, now, active)}
+                options = {item["route"]: item for item in route_candidates(
+                    conn, row, now, active, reserved_shared_probe, reserved_route_probes, reserve_unbound_probe)}
                 if selected["route"] in options:
                     batch.append(row)
                     if len(batch) >= MAX_BATCH:
@@ -802,6 +903,42 @@ def handle_status(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> d
     return {"items": items}
 
 
+def invitation_capacity(conn: sqlite3.Connection, now: int) -> tuple[dict[str | None, int], bool, set[str], bool]:
+    active = active_counts(conn, now)
+    reserved_shared_probe = False
+    reserved_route_probes: set[str] = set()
+    reserve_unbound_probe = False
+    for invitation in conn.execute(
+            "SELECT route,items_json,shared_probe,route_probe FROM invitations WHERE expires_at>?", (now,)).fetchall():
+        route = invitation["route"]
+        provider = provider_name(route) if route else None
+        active[provider] = active.get(provider, 0) + 1
+        if invitation["shared_probe"]:
+            reserved_shared_probe = True
+        if invitation["route_probe"] and route:
+            reserved_route_probes.add(route)
+        for ident in json.loads(invitation["items_json"]):
+            item = queue_row(conn, ident)
+            if not item or item["state"] != "queued" or int(item["retry_at"]) > now:
+                continue
+            for candidate in route_candidates(conn, item, now):
+                if candidate["shared_probe"]:
+                    reserved_shared_probe = True
+                if candidate["route_probe"]:
+                    reserved_route_probes.add(candidate["route"])
+        if route is None:
+            # A still-live invitation from the pre-migration schema has no
+            # route metadata, so conservatively cover probe-only capacity.
+            reserve_unbound_probe = True
+            shared = get_circuit(conn, "shared")
+            if shared and shared["probe_required"] and not shared["probe_token"]:
+                reserved_shared_probe = True
+            for circuit in conn.execute("SELECT route FROM circuits WHERE scope='route' AND probe_required=1 AND probe_token IS NULL"):
+                if route_state(conn, circuit["route"], now)[2]:
+                    reserved_route_probes.add(circuit["route"])
+    return active, reserved_shared_probe, reserved_route_probes, reserve_unbound_probe
+
+
 def handle_invite(conn: sqlite3.Connection, now: int) -> dict[str, Any]:
     invitations: list[str] = []
     for _ in range(MAX_INVITES_PER_CALL):
@@ -810,14 +947,17 @@ def handle_invite(conn: sqlite3.Connection, now: int) -> dict[str, Any]:
         covered: set[str] = set()
         for row in conn.execute("SELECT items_json FROM invitations WHERE expires_at>?", (now,)).fetchall():
             covered.update(json.loads(row["items_json"]))
-        plan = make_plan(conn, now, covered)
+        active, shared_probe, route_probes, unbound_probe = invitation_capacity(conn, now)
+        plan = make_plan(conn, now, covered, active, shared_probe, route_probes, unbound_probe)
         if plan is None:
             break
-        rows, _, _, _ = plan
+        rows, route, shared_probe, route_probe = plan
         invitation = secrets.token_hex(16)
         ids = [row["id"] for row in rows]
-        conn.execute("INSERT INTO invitations(id,items_json,created_at,expires_at) VALUES(?,?,?,?)",
-                     (invitation, canonical(ids), now, now + INVITATION_TTL_MS))
+        conn.execute(
+            "INSERT INTO invitations(id,items_json,created_at,expires_at,route,shared_probe,route_probe) VALUES(?,?,?,?,?,?,?)",
+            (invitation, canonical(ids), now, now + INVITATION_TTL_MS, route, int(shared_probe), int(route_probe)),
+        )
         invitations.append(invitation)
     return {"invitations": invitations}
 
@@ -837,13 +977,14 @@ def handle_claim(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
     if not invitation:
         conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
         return {"claim": None}
+    # Invites are one-shot work tokens. A valid run consumes its invitation
+    # even when its claim loses a capacity or circuit race.
+    conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
     ids = json.loads(invitation["items_json"])
     rows = [queue_row(conn, ident) for ident in ids]
     if not rows or any(row is None or row["state"] != "queued" or int(row["retry_at"]) > now for row in rows):
-        conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
         return {"claim": None}
     if any(row["settings_json"] != rows[0]["settings_json"] or row["single_only"] for row in rows[1:]) or (rows[0]["single_only"] and len(rows) > 1):
-        conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
         return {"claim": None}
     active = active_counts(conn, now)
     candidates = {item["route"]: item for item in route_candidates(conn, rows[0], now, active)}
@@ -868,8 +1009,14 @@ def handle_claim(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
     token = secrets.token_hex(16)
     deadline = now + WORKER_DEADLINE_MS
     lease_until = deadline + LEASE_MARGIN_MS
-    conn.execute("INSERT INTO attempts(token,route,deadline_at,lease_until,items_json,state,created_at,shared_probe,route_probe) VALUES(?,?,?,?,?,'active',?,?,?)",
-                 (token, route, deadline, lease_until, canonical(ids), now, int(shared_probe), int(route_probe)))
+    shared_generation = int(shared["decision_generation"]) if shared else 0
+    route_generation = int(route_circuit["decision_generation"]) if route_circuit else 0
+    conn.execute(
+        "INSERT INTO attempts(token,route,deadline_at,lease_until,items_json,state,created_at,shared_probe,route_probe,"
+        "shared_generation,route_generation) VALUES(?,?,?,?,?,'active',?,?,?,?,?)",
+        (token, route, deadline, lease_until, canonical(ids), now, int(shared_probe), int(route_probe),
+         shared_generation, route_generation),
+    )
     for ident in ids:
         conn.execute("UPDATE queue_items SET state='running',current_token=?,route=?,retry_at=0,reason=NULL,scope=NULL,updated_at=? WHERE id=? AND state='queued'",
                      (token, route, now, ident))
@@ -877,9 +1024,14 @@ def handle_claim(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> di
         set_circuit(conn, "shared", "", probe_token=token)
     if route_probe:
         set_circuit(conn, "route", route, probe_token=token)
+    if shared_probe:
+        shared_generation = int(get_circuit(conn, "shared")["decision_generation"])
+    if route_probe:
+        route_generation = int(get_circuit(conn, "route", route)["decision_generation"])
+    conn.execute("UPDATE attempts SET shared_generation=?,route_generation=? WHERE token=?",
+                 (shared_generation, route_generation, token))
     if selected["free"] == max(item["free"] for item in candidates.values()) and len([item for item in candidates.values() if item["free"] == selected["free"]]) > 1:
         conn.execute("INSERT INTO queue_meta(key,value) VALUES('last_tie_route',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (route,))
-    conn.execute("DELETE FROM invitations WHERE id=?", (data["invitation"],))
     attempt = conn.execute("SELECT * FROM attempts WHERE token=?", (token,)).fetchone()
     return {"claim": claim_object(conn, attempt)}
 
@@ -913,7 +1065,7 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
     receipt = conn.execute("SELECT payload_hash FROM receipts WHERE token=?", (token,)).fetchone()
     if receipt:
         return {"status": "committed" if receipt["payload_hash"] == request_hash else "stale"}
-    attempt = conn.execute("SELECT * FROM attempts WHERE token=? AND state='active' AND lease_until>=?", (token, now)).fetchone()
+    attempt = conn.execute("SELECT * FROM attempts WHERE token=? AND state='active' AND lease_until>?", (token, now)).fetchone()
     if not attempt:
         return {"status": "stale"}
     ids = json.loads(attempt["items_json"])
@@ -936,21 +1088,23 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
     route_response = any(item["kind"] in response_kinds for item in outcomes)
     shared_response = route_response
     if "shared_blocked" in kinds:
-        set_circuit(conn, "shared", "", hard_blocked=1, open_until=0, probe_required=0, probe_token=None,
-                    reason="shared_blocked", transient_count=0, backoff_count=0)
+        if circuit_can_change(conn, attempt, "shared"):
+            set_circuit(conn, "shared", "", hard_blocked=1, open_until=0, probe_required=0, probe_token=None,
+                        reason="shared_blocked", transient_count=0, backoff_count=0, transient_base_generation=None)
     elif "shared_transient" in kinds:
-        record_shared_transient(conn, now, shared_hint)
-    elif attempt["shared_probe"] and shared_response:
+        record_shared_transient(conn, now, shared_hint, attempt)
+    elif attempt["shared_probe"] and shared_response and circuit_can_change(conn, attempt, "shared"):
         set_circuit(conn, "shared", "", hard_blocked=0, open_until=0, transient_count=0,
-                    probe_required=0, probe_token=None, backoff_count=0, reason=None)
+                    probe_required=0, probe_token=None, backoff_count=0, reason=None, transient_base_generation=None)
     if "route_blocked" in kinds:
-        set_circuit(conn, "route", route, hard_blocked=1, open_until=0, probe_required=0, probe_token=None,
-                    reason="route_blocked", transient_count=0, backoff_count=0)
+        if circuit_can_change(conn, attempt, "route"):
+            set_circuit(conn, "route", route, hard_blocked=1, open_until=0, probe_required=0, probe_token=None,
+                        reason="route_blocked", transient_count=0, backoff_count=0, transient_base_generation=None)
     elif "route_transient" in kinds:
-        route_retry_at, _ = record_route_transient(conn, route, now, route_hint)
-    elif (route_response and not shared_error) or any(item["kind"] == "result" for item in outcomes):
+        route_retry_at, _ = record_route_transient(conn, route, now, route_hint, attempt)
+    elif ((route_response and not shared_error) or any(item["kind"] == "result" for item in outcomes)) and circuit_can_change(conn, attempt, "route"):
         set_circuit(conn, "route", route, hard_blocked=0, open_until=0, transient_count=0,
-                    probe_required=0, probe_token=None, backoff_count=0, reason=None)
+                    probe_required=0, probe_token=None, backoff_count=0, reason=None, transient_base_generation=None)
     for outcome in outcomes:
         ident = outcome["id"]
         row = rows[ident]
@@ -994,7 +1148,7 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
                 retry_count = int(row["retry_count"]) + 1
                 conn.execute("UPDATE queue_items SET state='queued',priority='retry',current_token=NULL,retry_at=0,retry_count=?,reason=?,route=?,scope='route',updated_at=? WHERE id=? AND current_token=?",
                              (retry_count, reason, route, now, ident, token))
-                conn.execute("INSERT INTO item_route_failures(item_id,route,retry_at,reason) VALUES(?,?,?,?) ON CONFLICT(item_id,route) DO UPDATE SET retry_at=excluded.retry_at,reason=excluded.reason",
+                conn.execute("INSERT INTO item_route_failures(item_id,route,retry_at,reason) VALUES(?,?,?,?) ON CONFLICT(item_id,route) DO UPDATE SET retry_at=max(retry_at,excluded.retry_at),reason=excluded.reason",
                              (ident, route, retry_at, reason))
             else:
                 conn.execute("UPDATE queue_items SET state='queued',priority='retry',current_token=NULL,retry_at=0,reason=?,route=?,scope='route',updated_at=? WHERE id=? AND current_token=?",
@@ -1007,13 +1161,13 @@ def handle_complete(conn: sqlite3.Connection, data: dict[str, Any], now: int) ->
             else:
                 conn.execute("UPDATE queue_items SET state='queued',priority='retry',current_token=NULL,retry_at=0,reason=?,route=?,scope='shared',updated_at=? WHERE id=? AND current_token=?",
                              (reason, route, now, ident, token))
-    # A transient/blocked route result does not consume a shared probe if the
-    # shared API itself responded; route-only errors keep the peer selectable.
+    # Release only this attempt's probe after a result that did not decide that
+    # circuit; a different probe or newer generation is never touched.
     shared = get_circuit(conn, "shared")
-    if attempt["shared_probe"] and shared and shared["probe_token"] == token and not shared_error:
+    if circuit_owned_by_attempt(shared, attempt, "shared") and not shared_error:
         set_circuit(conn, "shared", "", probe_token=None)
     circuit = get_circuit(conn, "route", route)
-    if circuit and circuit["probe_token"] == token and not route_error:
+    if circuit_owned_by_attempt(circuit, attempt, "route") and not route_error:
         set_circuit(conn, "route", route, probe_token=None)
     conn.execute("UPDATE attempts SET state='completed' WHERE token=?", (token,))
     conn.execute("INSERT INTO receipts(token,payload_hash,completed_at) VALUES(?,?,?)", (token, request_hash, now))
@@ -1034,7 +1188,8 @@ def handle_recheck(conn: sqlite3.Connection, data: dict[str, Any], now: int) -> 
     circuit = get_circuit(conn, scope, route)
     if circuit and circuit["hard_blocked"] and not circuit["probe_token"]:
         set_circuit(conn, scope, route, hard_blocked=0, open_until=now, transient_count=0,
-                    probe_required=1, probe_token=None, backoff_count=0, reason="recheck")
+                    probe_required=1, probe_token=None, backoff_count=0, reason="recheck",
+                    transient_base_generation=None)
     return {"ok": True}
 
 
@@ -1045,11 +1200,19 @@ def dispatch(action: str, raw_input: Any) -> dict[str, Any]:
     if conn is None:
         return {"items": []} if action == "status" else {"claim": None}
     try:
-        now = now_ms()
         tx_begin(conn, write)
+        # SQLite serializes the write decision at BEGIN IMMEDIATE. Sample time
+        # only after that lock is held so lease recovery/completion use authority
+        # time at the transaction's admission point.
+        now = now_ms()
+        receipt_before = (conn.execute("SELECT payload_hash FROM receipts WHERE token=?", (data["token"],)).fetchone()
+                          if action == "complete" else None)
         if write:
             recover_expired_attempts(conn, now)
-            prune_metadata(conn, now)
+            # Keep a stored completion receipt visible through replay lookup;
+            # retention pruning can run after the action commits its response.
+            if action != "complete":
+                prune_metadata(conn, now)
         elif conn.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
             "('queue_items','attempts','invitations','circuits','item_route_failures','receipts','queue_meta')"
@@ -1073,6 +1236,11 @@ def dispatch(action: str, raw_input: Any) -> dict[str, Any]:
             invalid()
         if write:
             prune_metadata(conn, now)
+        if action == "complete" and result.get("status") == "committed" and receipt_before is None:
+            attempt = conn.execute("SELECT lease_until FROM attempts WHERE token=?", (data["token"],)).fetchone()
+            if not attempt or int(attempt["lease_until"]) <= now_ms():
+                conn.rollback()
+                return {"status": "stale"}
         conn.commit()
         return result
     except Exception:
