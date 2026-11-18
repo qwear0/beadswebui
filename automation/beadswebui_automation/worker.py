@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import math
 import os
 import re
+import subprocess
+import sys
 import time
-import uuid
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from http.client import HTTPException
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -23,16 +22,21 @@ _MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_GATEWAY_RESPONSE_BYTES = 1024 * 1024
 _MAX_REQUEST_BYTES = 1024 * 1024
 _MAX_SOURCE_BYTES = 512 * 1024
-_MAX_TEXT_BYTES = 128 * 1024
-_COMPLETION_RESERVE_MS = 5_000
-_MAX_GATEWAY_SECONDS = 180.0
-_ALLOWED_ROUTES = frozenset({"subshare_api/gpt-6-luna", "subshare/gpt-6-luna"})
+_MAX_TEXT = 8_000
+_MAX_BATCH = 4
+_MAX_INVITATIONS = 6
+_MAX_SAFE_INTEGER = 9_007_199_254_740_991
+_MAX_CLAIM_SECONDS = 180.0
+_LEASE_MARGIN_SECONDS = 30.0
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
-_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_TOKEN = re.compile(r"[a-f0-9]{32}")
 _KEY = re.compile(r"^[a-f0-9]{64}$")
 _SAFE_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SAFE_MODEL = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_GATEWAY_HEADERS = ("Retry-After", "X-Neuro-Gate-Provider", "X-Neuro-Gate-Resolved-Model")
+
+
 class WorkerError(Exception):
     """An intentionally content-free failure safe for Dagster's run log."""
 
@@ -95,6 +99,8 @@ def _safe_url(raw: str, *, gateway: bool) -> str:
             raise WorkerConfigError("invalid_gateway_url")
         path += "/chat/completions"
     else:
+        if path.endswith("/api/dashboard/worker"):
+            raise WorkerConfigError("invalid_worker_base_url")
         path += "/api/dashboard/worker"
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
@@ -122,28 +128,12 @@ def _read_secret(env_name: str, file_env_name: str) -> str:
     return token
 
 
-def _read_bounded(response: Any, limit: int, deadline: float) -> bytes:
-    chunks = []
-    size = 0
-    while size <= limit:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError
-        stream = getattr(response, "fp", None)
-        raw_stream = getattr(stream, "raw", None)
-        sock = getattr(raw_stream, "_sock", None)
-        if sock is not None:
-            sock.settimeout(remaining)
-        read_chunk = getattr(response, "read1", response.read)
-        chunk = read_chunk(min(65_536, limit + 1 - size))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        size += len(chunk)
-    return b"".join(chunks)
-
-
-def _http_post(url: str, body: bytes, token: str, timeout: float, response_limit: int):
+def _http_child() -> None:
+    url, token, deadline, response_limit = json.loads(sys.stdin.buffer.readline())
+    body = sys.stdin.buffer.read()
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError
     request = Request(
         url,
         data=body,
@@ -154,33 +144,58 @@ def _http_post(url: str, body: bytes, token: str, timeout: float, response_limit
         },
         method="POST",
     )
-    deadline = time.monotonic() + max(0.1, timeout)
     try:
-        response = _HTTP.open(request, timeout=max(0.1, timeout))
+        response = _HTTP.open(request, timeout=remaining)
     except HTTPError as error:
         response = error
-    except (URLError, TimeoutError, OSError, HTTPException, ValueError):
-        raise TransportFailure("connect") from None
     try:
         status = int(response.getcode())
-        headers = response.headers
-        try:
-            response_body = _read_bounded(response, response_limit, deadline)
-        except (URLError, TimeoutError, OSError, HTTPException):
-            if 200 <= status < 300:
-                raise TransportFailure("read") from None
-            response_body = b""
-        return status, headers, response_body, len(response_body) > response_limit
+        gateway = response_limit == _MAX_GATEWAY_RESPONSE_BYTES
+        # API error responses are definitive even if their body never finishes.
+        payload = response.read(response_limit + 1) if gateway or 200 <= status < 300 else b""
+        stream = getattr(response, "fp", None) if isinstance(response, HTTPError) else response
+        if len(payload) <= response_limit and (gateway or 200 <= status < 300) and getattr(stream, "length", None):
+            raise ValueError("incomplete_response")
+        headers = {name: response.headers.get(name) for name in _GATEWAY_HEADERS} if gateway else {}
+        sys.stdout.buffer.write(_json_bytes([status, headers]) + b"\n" + payload)
     finally:
         response.close()
 
 
-def _api_post(action: str, args: dict[str, Any], timeout: float = _WORKER_TIMEOUT_SECONDS) -> dict[str, Any]:
+def _http_post(url: str, body: bytes, token: str, deadline: float, response_limit: int):
+    # Kill and reap the one-shot I/O child on timeout, including during DNS,
+    # TLS, sending, and slow headers/body. No content on argv or in logs.
+    wire = _json_bytes([url, token, deadline, response_limit]) + b"\n" + body
+    if time.monotonic() >= deadline:
+        raise TransportFailure("deadline")
+    try:
+        with subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--http-post"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        ) as child:
+            try:
+                output, _ = child.communicate(wire, timeout=deadline - time.monotonic())
+            finally:
+                if child.poll() is None:
+                    child.kill()
+            if child.returncode != 0:
+                raise TransportFailure("http_transport")
+        metadata, _, response_body = output.partition(b"\n")
+        status, headers = json.loads(metadata)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        raise TransportFailure("http_transport") from None
+    if time.monotonic() >= deadline:
+        raise TransportFailure("deadline")
+    return status, headers, response_body, len(response_body) > response_limit
+
+
+def _api_post(action: str, args: dict[str, Any], deadline: float = float("inf")) -> dict[str, Any]:
+    deadline = min(deadline, time.monotonic() + _WORKER_TIMEOUT_SECONDS)
     try:
         url = _safe_url(os.environ.get("SCOTTY_DASHBOARD_WORKER_URL", ""), gateway=False)
         token = _read_secret("SCOTTY_DASHBOARD_WORKER_TOKEN", "SCOTTY_DASHBOARD_WORKER_TOKEN_FILE")
         body = _json_bytes({"action": action, **args})
-        status, _headers, response_body, too_large = _http_post(url, body, token, timeout, _MAX_API_RESPONSE_BYTES)
+        status, _headers, response_body, too_large = _http_post(url, body, token, deadline, _MAX_API_RESPONSE_BYTES)
     except (WorkerConfigError, TransportFailure, TypeError, ValueError):
         raise WorkerAPIError("worker_api_unavailable") from None
     if not 200 <= status < 300:
@@ -190,32 +205,31 @@ def _api_post(action: str, args: dict[str, Any], timeout: float = _WORKER_TIMEOU
         raise WorkerAPIError("worker_api_response_too_large")
     try:
         value = json.loads(response_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         raise WorkerAPIError("worker_api_invalid_response") from None
     if not isinstance(value, dict):
         raise WorkerAPIError("worker_api_invalid_response")
     return value
 
 
-def _complete(token: str, outcomes: list[dict[str, Any]]) -> str:
+def _complete(token: str, outcomes: list[dict[str, Any]], lease_deadline: float) -> str:
     # Encode once and replay these exact bytes only when the receipt transport is
     # uncertain. HTTP responses, including stale, are never retried.
     try:
         url = _safe_url(os.environ.get("SCOTTY_DASHBOARD_WORKER_URL", ""), gateway=False)
         body = _json_bytes({"action": "complete", "token": token, "outcomes": outcomes})
+        credential = _read_secret("SCOTTY_DASHBOARD_WORKER_TOKEN", "SCOTTY_DASHBOARD_WORKER_TOKEN_FILE")
     except (WorkerConfigError, TypeError, ValueError):
         raise WorkerError("completion_configuration_invalid") from None
     response = None
     for attempt in range(2):
         try:
-            credential = _read_secret("SCOTTY_DASHBOARD_WORKER_TOKEN", "SCOTTY_DASHBOARD_WORKER_TOKEN_FILE")
-            response = _http_post(url, body, credential, _WORKER_TIMEOUT_SECONDS, _MAX_API_RESPONSE_BYTES)
+            deadline = min(lease_deadline, time.monotonic() + _WORKER_TIMEOUT_SECONDS)
+            response = _http_post(url, body, credential, deadline, _MAX_API_RESPONSE_BYTES)
             break
         except TransportFailure:
             if attempt == 1:
                 raise WorkerError("completion_transport_failed") from None
-        except WorkerConfigError:
-            raise WorkerError("completion_access_unavailable") from None
     if response is None:
         raise WorkerError("completion_transport_failed")
     status, _headers, response_body, too_large = response
@@ -225,26 +239,19 @@ def _complete(token: str, outcomes: list[dict[str, Any]]) -> str:
         raise WorkerError("completion_receipt_invalid")
     try:
         receipt = json.loads(response_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         raise WorkerError("completion_receipt_invalid") from None
-    if not isinstance(receipt, dict) or receipt.get("status") not in {"committed", "stale"}:
+    if not isinstance(receipt, dict) or set(receipt) != {"status"} or receipt["status"] not in ("committed", "stale"):
         raise WorkerError("completion_receipt_invalid")
     return receipt["status"]
 
 
-def _uuid(value: Any) -> bool:
-    if not isinstance(value, str) or not _UUID.fullmatch(value):
-        return False
-    try:
-        return str(uuid.UUID(value)) == value
-    except ValueError:
-        return False
+def _token(value: Any) -> bool:
+    return isinstance(value, str) and _TOKEN.fullmatch(value) is not None
 
 
-def _deadline(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return None
-    return float(value)
+def _deadline(value: Any) -> int | None:
+    return value if type(value) is int and 0 <= value <= _MAX_SAFE_INTEGER else None
 
 
 def _safe_id(value: Any) -> bool:
@@ -259,8 +266,9 @@ def _parse_settings(value: Any) -> dict[str, Any] | None:
     prompt = value.get("prompt")
     if (
         not isinstance(providers, list)
-        or len(providers) > 32
-        or any(not isinstance(p, str) or not p or len(p) > 200 or _CONTROL.search(p) for p in providers)
+        or not 1 <= len(providers) <= 2
+        or any(not isinstance(p, str) or not _SAFE_MODEL.fullmatch(p) for p in providers)
+        or providers != sorted(set(providers))
         or not isinstance(effort, str)
         or effort not in _EFFORTS
         or not isinstance(prompt, str)
@@ -280,11 +288,11 @@ def _parse_ref(value: Any) -> dict[str, str] | None:
 
 
 def _claimed_items(value: Any) -> list[dict[str, Any]] | None:
-    if not isinstance(value, list) or not value or len(value) > 100:
+    if not isinstance(value, list) or not 1 <= len(value) <= _MAX_BATCH:
         return None
     items = []
     for raw in value:
-        if not isinstance(raw, dict) or not _safe_id(raw.get("id")):
+        if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not _KEY.fullmatch(raw["id"]):
             return None
         ref = _parse_ref(raw.get("ref"))
         settings = _parse_settings(raw.get("settings"))
@@ -294,15 +302,8 @@ def _claimed_items(value: Any) -> list[dict[str, Any]] | None:
             "settings": settings,
             "problem": None if ref is not None and settings is not None else "claim_item_invalid",
         })
-    counts: dict[str, int] = {}
-    for item in items:
-        counts[item["id"]] = counts.get(item["id"], 0) + 1
-    for item in items:
-        if counts[item["id"]] > 1:
-            item["problem"] = "claim_item_duplicate"
-    if len(items) > 4:
-        for item in items:
-            item["problem"] = "claim_batch_invalid"
+    if len({item["id"] for item in items}) != len(items):
+        return None
     return items
 
 
@@ -321,7 +322,7 @@ def _retry_after(headers: Any) -> int | None:
     seconds: float | None = None
     try:
         seconds = float(raw)
-        if not math.isfinite(seconds) or seconds < 0:
+        if not 0 <= seconds < float("inf"):
             seconds = None
     except ValueError:
         try:
@@ -333,7 +334,9 @@ def _retry_after(headers: Any) -> int | None:
             seconds = None
     if seconds is None:
         return None
-    return min(86_400_000, int(seconds * 1000))
+    # Leave headroom for queue validation and timestamp arithmetic at receipt.
+    max_ms = max(0, _MAX_SAFE_INTEGER - time.time_ns() // 1_000_000 - 60_000)
+    return min(max_ms, int(min(seconds, max_ms / 1000) * 1000))
 
 
 def _error_code(body: bytes, too_large: bool) -> str | None:
@@ -341,7 +344,7 @@ def _error_code(body: bytes, too_large: bool) -> str | None:
         return None
     try:
         payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -351,20 +354,21 @@ def _error_code(body: bytes, too_large: bool) -> str | None:
 
 
 def _verified_effective_model(headers: Any, route: str) -> tuple[str | None, str | None]:
-    requested_provider, requested_model = route.split("/", 1)
-    provider = headers.get("X-Neuro-Gate-Provider") if headers is not None else None
-    model = headers.get("X-Neuro-Gate-Resolved-Model") if headers is not None else None
+    provider = headers.get("X-Neuro-Gate-Provider")
+    model = headers.get("X-Neuro-Gate-Resolved-Model")
     if (
         not isinstance(provider, str)
         or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", provider)
         or not isinstance(model, str)
         or not _SAFE_MODEL.fullmatch(model)
+        or model.partition("/")[0] != provider
+        or not model.partition("/")[2]
     ):
         return None, "route_unverified"
-    if provider != requested_provider or model != requested_model:
+    if "/" in route and not route.startswith("route:") and model != route:
         return None, "route_mismatch"
-    # The body `model` field is pass-through and not evidence of the route.
-    return f"{provider}/{model}", None
+    # The header is already a full catalog ID; the body model is pass-through.
+    return model, None
 
 
 def _gateway_config() -> tuple[str, str]:
@@ -376,17 +380,13 @@ def _gateway_config() -> tuple[str, str]:
     return url, token
 
 
-def _source_json(source: Any) -> tuple[str, int] | None:
+def _valid_source(source: Any) -> bool:
     if not isinstance(source, dict):
-        return None
+        return False
     try:
-        encoded = json.dumps(source, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        size = len(encoded.encode("utf-8"))
-    except (TypeError, ValueError, UnicodeEncodeError):
-        return None
-    if size > _MAX_SOURCE_BYTES:
-        return None
-    return encoded, size
+        return len(_json_bytes(source)) <= _MAX_SOURCE_BYTES
+    except (TypeError, ValueError, RecursionError):
+        return False
 
 
 def _payload(items: list[dict[str, Any]], route: str) -> bytes:
@@ -418,14 +418,6 @@ def _set_group(outcomes: list[dict[str, Any] | None], items: list[dict[str, Any]
         outcomes[item["index"]] = _outcome(item["id"], kind, reason, **fields)
 
 
-def _retry_malformed(items: list[dict[str, Any]], deadline: float, route: str, outcomes: list[dict[str, Any] | None]) -> None:
-    if len(items) == 1:
-        outcomes[items[0]["index"]] = _outcome(items[0]["id"], "malformed", "invalid_model_response")
-    else:
-        for item in items:
-            _infer([item], deadline, route, outcomes)
-
-
 def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: list[dict[str, Any] | None]) -> None:
     if not items:
         return
@@ -435,20 +427,12 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
         _set_group(outcomes, items, "invalid", "source_invalid")
         return
     if len(body) > _MAX_REQUEST_BYTES:
-        if len(items) > 1:
-            middle = len(items) // 2
-            _infer(items[:middle], deadline, route, outcomes)
-            _infer(items[middle:], deadline, route, outcomes)
-        else:
-            _set_group(outcomes, items, "invalid", "request_too_large")
+        _set_group(outcomes, items, "split" if len(items) > 1 else "invalid", "request_too_large")
         return
 
-    remaining_ms = deadline - time.time() * 1000
-    inference_ms = remaining_ms - _COMPLETION_RESERVE_MS
-    if inference_ms <= 0:
+    if time.monotonic() >= deadline:
         _set_group(outcomes, items, "route_transient", "lease_exhausted")
         return
-    timeout = min(_MAX_GATEWAY_SECONDS, inference_ms / 1000)
     try:
         gateway_url, gateway_token = _gateway_config()
     except WorkerConfigError:
@@ -456,7 +440,7 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
         return
     try:
         status, headers, response_body, too_large = _http_post(
-            gateway_url, body, gateway_token, timeout, _MAX_GATEWAY_RESPONSE_BYTES
+            gateway_url, body, gateway_token, deadline, _MAX_GATEWAY_RESPONSE_BYTES
         )
     except TransportFailure:
         _set_group(outcomes, items, "route_transient", "gateway_transport")
@@ -486,9 +470,7 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
     )
     if is_split_error:
         if len(items) > 1:
-            middle = len(items) // 2
-            _infer(items[:middle], deadline, route, outcomes)
-            _infer(items[middle:], deadline, route, outcomes)
+            _set_group(outcomes, items, "split", "gateway_batch_rejected")
         elif status == 413 or code == "request_too_large":
             _set_group(outcomes, items, "invalid", "gateway_request_too_large")
         else:
@@ -498,7 +480,7 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
         _set_group(outcomes, items, "invalid", "gateway_invalid_request")
         return
     if not 200 <= status < 300:
-        reason = f"gateway_http_{status}_{code}"[:180] if code else f"gateway_http_{status}"
+        reason = f"gateway_http_{status}"
         if 300 <= status < 400:
             kind = "route_blocked"
         elif code in route_blocked:
@@ -513,12 +495,7 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
         _set_group(outcomes, items, kind, reason, retry_after)
         return
     if too_large:
-        if len(items) > 1:
-            middle = len(items) // 2
-            _infer(items[:middle], deadline, route, outcomes)
-            _infer(items[middle:], deadline, route, outcomes)
-        else:
-            _set_group(outcomes, items, "malformed", "gateway_response_too_large")
+        _set_group(outcomes, items, "malformed", "gateway_response_too_large")
         return
 
     model, route_error = _verified_effective_model(headers, route)
@@ -531,62 +508,51 @@ def _infer(items: list[dict[str, Any]], deadline: float, route: str, outcomes: l
         choices = response.get("choices") if isinstance(response, dict) else None
         message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
         content = message.get("content") if isinstance(message, dict) else None
-    except (UnicodeDecodeError, json.JSONDecodeError, IndexError, TypeError):
-        content = None
-        response = None
-    if not isinstance(content, str):
-        _retry_malformed(items, deadline, route, outcomes)
-        return
-    try:
-        decoded = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        _retry_malformed(items, deadline, route, outcomes)
-        return
+        decoded = json.loads(content) if isinstance(content, str) else None
+    except (ValueError, RecursionError):
+        decoded = None
     if not isinstance(decoded, dict):
-        _retry_malformed(items, deadline, route, outcomes)
+        _set_group(outcomes, items, "malformed", "invalid_model_response")
         return
 
-    unresolved = []
     for item in items:
-        text = decoded.get(item["ref"]["key"])
-        try:
-            text_size = len(text.encode("utf-8")) if isinstance(text, str) else _MAX_TEXT_BYTES + 1
-        except UnicodeEncodeError:
-            text_size = _MAX_TEXT_BYTES + 1
-        if isinstance(text, str) and text.strip() and text_size <= _MAX_TEXT_BYTES:
-            outcomes[item["index"]] = _outcome(item["id"], "result", text=text, model=model)
+        key = item["ref"]["key"]
+        text = decoded.get(key)
+        if key not in decoded:
+            _set_group(outcomes, [item], "malformed", "model_text_missing")
+        elif not isinstance(text, str) or not text.strip() or "\x00" in text or re.search(r"[\ud800-\udfff]", text):
+            _set_group(outcomes, [item], "malformed", "model_text_invalid")
+        elif len(text) > _MAX_TEXT:
+            _set_group(outcomes, [item], "malformed", "model_text_too_large")
         else:
-            unresolved.append(item)
-    if unresolved:
-        _retry_malformed(unresolved, deadline, route, outcomes)
-
-
-def _worker_api_timeout(deadline: float) -> float | None:
-    remaining = (deadline - time.time() * 1000) / 1000
-    reserve = _COMPLETION_RESERVE_MS / 1000
-    if remaining <= reserve:
-        return None
-    return min(_WORKER_TIMEOUT_SECONDS, remaining - reserve)
+            outcomes[item["index"]] = _outcome(item["id"], "result", text=text, model=model)
 
 
 def run_invitation(invitation: str) -> None:
-    if not _uuid(invitation):
+    if not _token(invitation):
         raise WorkerError("invitation_invalid")
+    started = time.monotonic()
     try:
         response = _api_post("claim", {"invitation": invitation})
     except WorkerAPIError:
         raise WorkerError("claim_unavailable") from None
-    claim = response.get("claim")
+    if set(response) != {"claim"}:
+        raise WorkerError("claim_invalid")
+    claim = response["claim"]
     if claim is None:
         return
     if not isinstance(claim, dict):
         raise WorkerError("claim_invalid")
     token = claim.get("token")
     route = claim.get("route")
-    deadline = _deadline(claim.get("deadlineAt"))
+    deadline_ms = _deadline(claim.get("deadlineAt"))
     items = _claimed_items(claim.get("items"))
-    if not isinstance(token, str) or not token or len(token) > 8192 or _CONTROL.search(token) or deadline is None or items is None:
+    if not _token(token) or deadline_ms is None or items is None:
         raise WorkerError("claim_invalid")
+    # Convert the queue's wall-clock deadline once, without restarting the
+    # budget on resolve or on successive groups. Leave the lease margin for receipts.
+    deadline = min(started + _MAX_CLAIM_SECONDS, time.monotonic() + (deadline_ms - time.time() * 1000) / 1000)
+    lease_deadline = deadline + _LEASE_MARGIN_SECONDS
 
     outcomes: list[dict[str, Any] | None] = [None] * len(items)
     for index, item in enumerate(items):
@@ -594,58 +560,36 @@ def run_invitation(invitation: str) -> None:
         if item["problem"]:
             outcomes[index] = _outcome(item["id"], "invalid", item["problem"])
 
-    if not isinstance(route, str) or route not in _ALLOWED_ROUTES:
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "route_blocked", "unsupported_route")
-        _complete(token, [value for value in outcomes if value is not None])
+    def finish_remaining(kind: str, reason: str) -> None:
+        _set_group(outcomes, [item for item in items if outcomes[item["index"]] is None], kind, reason)
+        _complete(token, [value for value in outcomes if value is not None], lease_deadline)
+
+    if not isinstance(route, str) or not _SAFE_MODEL.fullmatch(route) or any(
+        item["settings"] is not None and route not in item["settings"]["providers"] for item in items
+    ):
+        finish_remaining("route_blocked", "unsupported_route")
         return
 
-    if len(items) > 4 or deadline <= time.time() * 1000:
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "source_retry", "lease_exhausted_before_resolve")
-        _complete(token, [value for value in outcomes if value is not None])
-        return
-
-    resolve_timeout = _worker_api_timeout(deadline)
-    if resolve_timeout is None:
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "source_retry", "lease_exhausted_before_resolve")
-        _complete(token, [value for value in outcomes if value is not None])
+    if time.monotonic() >= deadline:
+        finish_remaining("source_retry", "lease_exhausted_before_resolve")
         return
     try:
-        resolved_response = _api_post("resolve", {"token": token}, timeout=resolve_timeout)
+        resolved_response = _api_post("resolve", {"token": token}, deadline=deadline)
     except WorkerAPIError:
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "source_retry", "resolve_unavailable")
-        _complete(token, [value for value in outcomes if value is not None])
+        finish_remaining("source_retry", "resolve_unavailable")
         return
 
     resolved = resolved_response.get("claim")
-    if resolved is None or not isinstance(resolved, dict):
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "source_retry", "resolve_unavailable")
-        _complete(token, [value for value in outcomes if value is not None])
+    if not isinstance(resolved, dict):
+        finish_remaining("source_retry", "resolve_unavailable")
         return
-    resolved_deadline = _deadline(resolved.get("deadlineAt"))
-    resolved_route = resolved.get("route")
     resolved_items = resolved.get("items")
-    if resolved.get("token") != token or resolved_deadline is None or not isinstance(resolved_items, list):
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "source_retry", "resolve_invalid")
-        _complete(token, [value for value in outcomes if value is not None])
+    if (resolved.get("token") != token or _deadline(resolved.get("deadlineAt")) != deadline_ms
+            or not isinstance(resolved_items, list) or len(resolved_items) != len(items)):
+        finish_remaining("source_retry", "resolve_invalid")
         return
-    deadline = min(deadline, resolved_deadline)
-    if resolved_route != route:
-        for item in items:
-            if outcomes[item["index"]] is None:
-                outcomes[item["index"]] = _outcome(item["id"], "route_blocked", "route_mismatch")
-        _complete(token, [value for value in outcomes if value is not None])
+    if resolved.get("route") != route:
+        finish_remaining("route_blocked", "route_mismatch")
         return
 
     by_id: dict[str, list[dict[str, Any]]] = {}
@@ -662,42 +606,28 @@ def run_invitation(invitation: str) -> None:
             outcomes[index] = _outcome(item["id"], "source_retry", "resolve_item_missing")
             continue
         raw = matches[0]
-        if "outcome" in raw:
-            explicit = raw.get("outcome")
-            if "source" not in raw and isinstance(explicit, dict) and explicit.get("kind") in {"obsolete", "source_retry"}:
-                outcomes[index] = _outcome(item["id"], explicit["kind"], explicit["kind"])
-            else:
-                outcomes[index] = _outcome(item["id"], "invalid", "resolve_outcome_invalid")
-            continue
-        ref = _parse_ref(raw.get("ref"))
-        settings = _parse_settings(raw.get("settings"))
-        source = _source_json(raw.get("source")) if "source" in raw else None
-        if ref != item["ref"]:
+        if _parse_ref(raw.get("ref")) != item["ref"]:
             outcomes[index] = _outcome(item["id"], "invalid", "resolve_reference_mismatch")
             continue
-        if settings is None:
-            outcomes[index] = _outcome(item["id"], "invalid", "resolve_settings_invalid")
+        if _parse_settings(raw.get("settings")) != item["settings"]:
+            outcomes[index] = _outcome(item["id"], "invalid", "resolve_settings_mismatch")
+            continue
+        if "outcome" in raw:
+            explicit = raw.get("outcome")
+            kind = explicit.get("kind") if isinstance(explicit, dict) and explicit.get("id") == item["id"] else None
+            if "source" not in raw and kind in ("obsolete", "source_retry"):
+                outcomes[index] = _outcome(item["id"], kind, kind)
+            else:
+                outcomes[index] = _outcome(item["id"], "invalid", "resolve_outcome_invalid")
             continue
         if "source" not in raw:
             outcomes[index] = _outcome(item["id"], "source_retry", "source_unavailable")
             continue
-        if source is None:
+        if not _valid_source(raw["source"]):
             outcomes[index] = _outcome(item["id"], "invalid", "source_invalid")
             continue
-        permitted_providers = {route, route.split("/", 1)[0]}
-        if not permitted_providers.intersection(settings["providers"]):
-            outcomes[index] = _outcome(item["id"], "route_blocked", "route_not_allowed")
-            continue
-        item["settings"] = settings
-        item["source"] = json.loads(source[0])
-        item["source_size"] = source[1]
+        item["source"] = raw["source"]
         inference_items.append(item)
-
-    if deadline <= time.time() * 1000:
-        for item in inference_items:
-            outcomes[item["index"]] = _outcome(item["id"], "route_transient", "lease_exhausted")
-        _complete(token, [value for value in outcomes if value is not None])
-        return
 
     # One request can preserve partial keys only when all settings match. Queue
     # settings may differ per item, so batch matching prompt/effort without
@@ -717,13 +647,9 @@ def run_invitation(invitation: str) -> None:
                 outcomes[item["index"]] = _outcome(item["id"], "invalid", "duplicate_event_key")
             else:
                 valid_group.append(item)
-        for offset in range(0, len(valid_group), 4):
-            _infer(valid_group[offset : offset + 4], deadline, route, outcomes)
+        _infer(valid_group, deadline, route, outcomes)
 
-    for index, outcome in enumerate(outcomes):
-        if outcome is None:
-            outcomes[index] = _outcome(items[index]["id"], "invalid", "worker_incomplete")
-    _complete(token, [value for value in outcomes if value is not None])
+    finish_remaining("invalid", "worker_incomplete")
 
 
 def invite_ids() -> list[str]:
@@ -732,6 +658,16 @@ def invite_ids() -> list[str]:
     except WorkerAPIError:
         raise WorkerError("invitation_poll_unavailable") from None
     invitations = response.get("invitations")
-    if not isinstance(invitations, list) or len(invitations) > 256 or any(not _uuid(value) for value in invitations):
+    if (
+        set(response) != {"invitations"}
+        or not isinstance(invitations, list)
+        or len(invitations) > _MAX_INVITATIONS
+        or any(not _token(value) for value in invitations)
+        or len(set(invitations)) != len(invitations)
+    ):
         raise WorkerError("invitation_poll_invalid")
     return invitations
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--http-post"]:
+    _http_child()

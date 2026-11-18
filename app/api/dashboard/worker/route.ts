@@ -14,7 +14,12 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const PROJECT = /^[a-z0-9][a-z0-9-]{0,127}$/;
 const MESSAGE = /^msg_[0-9]{13}_[a-f0-9]{32}$/;
 const eventId = new RegExp(`^(?:${MESSAGE.source.slice(1, -1)}|${PROJECT.source.slice(1, -1)}\\/[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,895})$`);
-const safeToken = z.string().min(1).max(512).regex(/^[A-Za-z0-9_.:-]+$/);
+const tokenSchema = z.string().length(32).regex(/^[a-f0-9]{32}$/);
+const MAX_BATCH = 4;
+const MAX_INVITATIONS = 6;
+const MAX_TEXT = 8_000;
+// Match Python str.strip(), including its extra ASCII separators but not BOM.
+const nonWhitespace = /[^\p{White_Space}\u001c-\u001f]/u;
 const refSchema = z.object({ id: z.string().min(1).max(1024).regex(eventId), key: z.string().regex(SHA256) }).strict();
 const modelSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:/-]+$/);
 const executorSettingsSchema = z.object({
@@ -24,25 +29,27 @@ const executorSettingsSchema = z.object({
 }).strict();
 const claimItemSchema = z.object({ id: z.string().regex(SHA256), ref: refSchema, settings: executorSettingsSchema }).strict();
 const claimSchema = z.object({
-  token: safeToken,
+  token: tokenSchema,
   route: modelSchema,
-  deadlineAt: z.number().int().nonnegative(),
-  items: z.array(claimItemSchema).min(1).max(40),
+  deadlineAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  items: z.array(claimItemSchema).min(1).max(MAX_BATCH),
 }).strict();
 const claimResultSchema = z.object({ claim: claimSchema.nullable() }).strict();
 const completeOutcomeSchema = z.object({
   id: z.string().regex(SHA256),
   kind: z.enum(["result", "obsolete", "source_retry", "malformed", "split", "invalid", "route_transient", "route_blocked", "shared_transient", "shared_blocked"]),
   reason: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).optional(),
-  text: z.string().min(1).max(16384).refine(text => text.trim().length > 0 && !text.includes("\0")).optional(),
+  text: z.string().max(MAX_TEXT * 2).refine(text =>
+    [...text].length <= MAX_TEXT && nonWhitespace.test(text) && !text.includes("\0") && !/[\uD800-\uDFFF]/u.test(text)
+  ).optional(),
   model: modelSchema.optional(),
-  retryAfterMs: z.number().int().nonnegative().max(86_400_000).optional(),
-}).strict();
+  retryAfterMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+}).strict().refine(outcome => outcome.kind !== "result" || outcome.text !== undefined);
 const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("invite") }).strict(),
-  z.object({ action: z.literal("claim"), invitation: safeToken }).strict(),
-  z.object({ action: z.literal("resolve"), token: safeToken }).strict(),
-  z.object({ action: z.literal("complete"), token: safeToken, outcomes: z.array(completeOutcomeSchema).min(1).max(40) }).strict(),
+  z.object({ action: z.literal("claim"), invitation: tokenSchema }).strict(),
+  z.object({ action: z.literal("resolve"), token: tokenSchema }).strict(),
+  z.object({ action: z.literal("complete"), token: tokenSchema, outcomes: z.array(completeOutcomeSchema).min(1).max(MAX_BATCH).refine(outcomes => new Set(outcomes.map(outcome => outcome.id)).size === outcomes.length) }).strict(),
   z.object({ action: z.literal("recheck"), scope: z.literal("shared") }).strict(),
   z.object({ action: z.literal("recheck"), scope: z.literal("route"), route: modelSchema }).strict(),
 ]);
@@ -86,7 +93,7 @@ function validateClaim(value: unknown) {
     const ids = new Set<string>();
     const keys = new Map<string, string>();
     for (const item of claim.items) {
-      if (item.id !== dashboardGenerationDigest(item.ref.key, item.settings) || ids.has(item.id)) throw new WorkerUnavailable();
+      if (!item.settings.providers.includes(claim.route) || item.id !== dashboardGenerationDigest(item.ref.key, item.settings) || ids.has(item.id)) throw new WorkerUnavailable();
       const previousId = keys.get(item.ref.key);
       if (previousId !== undefined && previousId !== item.ref.id) throw new WorkerUnavailable();
       ids.add(item.id);
@@ -161,7 +168,7 @@ export async function POST(request: Request) {
   try {
     if (input.action === "invite") {
       const result: unknown = await callDashboardQueue("invite", {});
-      const parsed = z.object({ invitations: z.array(safeToken).max(100) }).strict().safeParse(result);
+      const parsed = z.object({ invitations: z.array(tokenSchema).max(MAX_INVITATIONS).refine(tokens => new Set(tokens).size === tokens.length) }).strict().safeParse(result);
       if (!parsed.success) throw new WorkerUnavailable();
       return Response.json(parsed.data, { headers: noStore });
     }
