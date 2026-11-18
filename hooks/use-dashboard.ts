@@ -66,7 +66,7 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
   const checkedRevision = useRef(activityRevision);
   const statusLocks = useRef(new Set<string>());
   const admissionLocks = useRef(new Set<string>());
-  const uncertainAttempts = useRef(new Set<string>());
+  const uncertainAttempts = useRef(new Map<string, symbol>());
   const autoAdmissionAttempts = useRef(new Set<string>());
   const prefetchAccepted = useRef(new Set<string>());
   const promoted = useRef(new Set<string>());
@@ -88,7 +88,10 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
     setStored(current => {
       const next = { ...current };
       for (const [identity, value] of received) {
-        next[identity] = value;
+        const previous = current[identity]?.item;
+        const preserveCapacityRefusal = value.item.state === "not_accepted" && value.item.reason === "not_found"
+          && previous?.state === "not_accepted" && previous.reason === "capacity";
+        next[identity] = preserveCapacityRefusal ? { ...value, item: previous } : value;
       }
       return next;
     });
@@ -141,25 +144,36 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
           const generation = currentStored.current[dashboardSummaryIdentity(ref)]?.item.id;
           return generation && /^[a-f0-9]{64}$/.test(generation) ? { ...ref, generation } : ref;
         });
+        const attemptsAtRead = new Map(fresh.map(ref => {
+          const identity = dashboardSummaryIdentity(ref);
+          return [identity, uncertainAttempts.current.get(identity)] as const;
+        }));
         const response = await api.dashboardSummaryStatus(requested);
         if (!mounted.current || currentRevision.current !== revision) continue;
-        setItems(fresh, response, revision);
-        setUncertain(current => {
+        // A read already in flight when a POST became uncertain cannot reconcile it.
+        const applicable = fresh.filter(ref => {
+          const identity = dashboardSummaryIdentity(ref);
+          return uncertainAttempts.current.get(identity) === attemptsAtRead.get(identity);
+        });
+        if (!applicable.length) continue;
+        setItems(applicable, response, revision);
+        const reconciled = applicable.filter(ref => {
+          const identity = dashboardSummaryIdentity(ref);
+          const item = response.items[ref.key];
+          if (!attemptsAtRead.get(identity) || (item.state === "not_accepted" && item.reason === "capacity")) return false;
+          uncertainAttempts.current.delete(identity);
+          return true;
+        });
+        if (reconciled.length) setUncertain(current => {
           const next = { ...current };
-          for (const ref of fresh) {
-            const identity = dashboardSummaryIdentity(ref);
-            const reconciled = response.items[ref.key];
-            if (uncertainAttempts.current.has(identity) && reconciled
-              && !(reconciled.state === "not_accepted" && reconciled.reason === "capacity")) {
-              uncertainAttempts.current.delete(identity);
-              delete next[identity];
-            }
-          }
+          for (const ref of reconciled) delete next[dashboardSummaryIdentity(ref)];
           return next;
         });
-        const missing = fresh.filter(ref => {
+        const missing = applicable.filter(ref => {
+          const identity = dashboardSummaryIdentity(ref);
+          if (attemptsAtRead.get(identity)) return false;
           const item = response.items[ref.key];
-          const previous = currentStored.current[dashboardSummaryIdentity(ref)]?.item;
+          const previous = currentStored.current[identity]?.item;
           const capacityRefusal = previous?.state === "not_accepted" && previous.reason === "capacity";
           return item?.state === "not_accepted" && item.reason === "not_found" && !capacityRefusal;
         });
@@ -179,7 +193,7 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
           admissions.push({ entry, revision });
         }
         if (admissions.length) admissionSender.current?.(admissions);
-        for (const ref of fresh) {
+        for (const ref of applicable) {
           const item = response.items[ref.key];
           if (item && !(item.state === "not_accepted" && item.reason === "not_found")) {
             missingWhileHidden.current.delete(dashboardSummaryIdentity(ref));
@@ -195,7 +209,10 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
 
   const sendAdmissions = useCallback(async (jobs: AdmissionJob[], replay = false, trackUncertainty = replay) => {
     const unique = [...new Map(jobs
-      .filter(job => job.revision === currentRevision.current && !admissionLocks.current.has(dashboardSummaryIdentity(job.entry.ref)))
+      .filter(job => {
+        const identity = dashboardSummaryIdentity(job.entry.ref);
+        return job.revision === currentRevision.current && !admissionLocks.current.has(identity) && !uncertainAttempts.current.has(identity);
+      })
       .map(job => [dashboardSummaryIdentity(job.entry.ref), job])).values()];
     for (const batch of chunks(unique, MAX_BATCH)) {
       if (!mounted.current) return;
@@ -210,15 +227,6 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
         const response = await api.dashboardSummaryAdmit(batch.map(job => ({ ref: job.entry.ref, priority: replay ? "retry" : job.entry.priority })), replay);
         if (!mounted.current || currentRevision.current !== revision) continue;
         setItems(refs, response, revision);
-        if (trackUncertainty) setUncertain(current => {
-          const next = { ...current };
-          for (const job of batch) {
-            const identity = dashboardSummaryIdentity(job.entry.ref);
-            uncertainAttempts.current.delete(identity);
-            delete next[identity];
-          }
-          return next;
-        });
         for (const job of batch) {
           const item = response.items[job.entry.ref.key];
           const identity = dashboardSummaryIdentity(job.entry.ref);
@@ -232,15 +240,16 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
         }
       } catch {
         setRequestFailure(refs, revision);
-        if (trackUncertainty) setUncertain(current => {
-          const next = { ...current };
-          for (const ref of refs) {
-            const identity = dashboardSummaryIdentity(ref);
-            uncertainAttempts.current.add(identity);
-            next[identity] = true;
+        if (trackUncertainty && mounted.current) {
+          const identities = refs.map(dashboardSummaryIdentity);
+          for (const identity of identities) {
+            uncertainAttempts.current.set(identity, Symbol());
+            autoAdmissionAttempts.current.add(identity);
+            missingWhileHidden.current.delete(identity);
+            prefetchAccepted.current.delete(identity);
           }
-          return next;
-        });
+          setUncertain(current => ({ ...current, ...Object.fromEntries(identities.map(identity => [identity, true])) }));
+        }
         queueMicrotask(() => statusReader.current?.(refs, revision, false));
       } finally {
         batch.forEach(job => admissionLocks.current.delete(dashboardSummaryIdentity(job.entry.ref)));
