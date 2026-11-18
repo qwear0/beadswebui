@@ -12,12 +12,12 @@
 ## 2. Entry points and key paths
 
 - `app/page.tsx` renders `components/launcher.tsx`; `app/p/[projectId]/page.tsx` renders `components/app-shell.tsx`.
-- `app/dashboard/page.tsx` renders `components/dashboard.tsx` without a selected project. It reuses global presence, existing per-project Activity construction, and sanitized mail; [Dashboard](dashboard.md) owns the separate Neuro-gate description/settings/cache flow.
+- `app/dashboard/page.tsx` renders `components/dashboard.tsx` without a selected project. It reuses global presence, existing per-project Activity construction, and sanitized mail; [Dashboard](dashboard.md) documents source-validated durable admission, private executor boundary, settings, and legacy cache.
 - `components/providers.tsx` provides browser query/theme context; `hooks/use-beads.ts` owns issue queries and mutations.
 - `lib/api-client.ts` is the typed browser request surface; `app/api/p/[projectId]/beads/route.ts` is a representative server route.
 - `lib/schema.ts` defines data/input schemas. `lib/api.ts` centralizes API response helpers.
 - `lib/store.ts` selects a store; `lib/bd.ts` implements the local CLI adapter; `lib/demo-store.ts` implements demo behavior.
-- `lib/config.ts` owns application configuration and project lookup, separate from Beads issue data.
+- `lib/config.ts` owns application configuration and project lookup, separate from Beads issue data. Dashboard accepted summary work is persisted separately in app-owned SQLite state, not Beads or the legacy JSON cache.
 - doc: [Configuration](configuration.md), [API and Beads](api-and-beads.md), [browser state](ui-state.md), and [operations](operations.md) provide the narrow contracts behind this overview.
 
 ## 3. Main flow
@@ -41,9 +41,10 @@ Live refresh anchors:
 
 - Browser -> API: keep `lib/api-client.ts`, hook expectations, route responses, and `lib/schema.ts` aligned.
 - API -> Beads: preserve project working directory, actor propagation, error codes, and JSON parsing. `lib/bd.ts` serializes CLI operations per repository, including reads that can rewrite embedded Dolt state.
-- Configuration: `lib/config.ts` stores app settings under `XDG_CONFIG_HOME`, falling back to the user's config directory, in a `bead-me-up-scotty` subdirectory. Manual board order is app configuration, not issue metadata. Browser themes/display preferences are localStorage state; viewer mode is session-cookie state.
+- Configuration: `lib/config.ts` stores app settings under `XDG_CONFIG_HOME`, falling back to the user's config directory, in a `bead-me-up-scotty` subdirectory. Dashboard settings are separately stored in that app config directory; durable queue state is under `XDG_STATE_HOME/bead-me-up-scotty` (default `~/.local/state/bead-me-up-scotty`). Manual board order is app configuration, not issue metadata. Browser themes/display preferences are localStorage state; viewer mode is session-cookie state.
 - Project lookup: the registry and request URL choose the real project. `BEADS_REPO` only participates in initial legacy-registry migration, not a runtime override of registered entries.
 - Request boundary: `proxy.ts` uses `lib/request-guard.ts`; do not infer that browser viewer state alone enforces server mutation restrictions.
+- Dashboard executor boundary: the app resolves current source content and owns durable SQLite admission/status; the executor is a private external stage, receives only opaque invitations and claims, and must not mount raw app payloads, credentials, or the queue DB into its control plane. Admission remains off absent intentional preflight/stage evidence. See [Dashboard](dashboard.md) and [operations](operations.md).
 - Local tracker policy: this repository's issue data must remain local. Application publishing/update features do not authorize tracker synchronization.
 
 Launcher/build contracts:

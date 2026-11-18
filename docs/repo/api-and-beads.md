@@ -73,7 +73,7 @@ App-level routes are `/api/projects` (GET/POST), `/api/projects/{id}` (PATCH/DEL
 ### Global Dashboard boundary
 
 - contract: `/api/dashboard/activity` (GET) merges the current Activity window from every registered real project and paged sanitized mail; `/api/dashboard/messages/{messageId}` (GET) reads exact authorized message details. Neither endpoint sends mail or consumes native Delivery.
-- contract: `/api/dashboard/settings` (GET/PUT) exposes only model, effort and prompt. `/api/dashboard/summaries` (POST) accepts up to four observed event references (`key` and `id`) and returns generated descriptions/per-event errors. Credentials stay server-side; these app-level operations remain available in viewer mode. See [Dashboard](dashboard.md) for caching, provider exposure, and single-request generation.
+- contract: `/api/dashboard/settings` (GET/PUT) exposes only model, effort and prompt. `/api/dashboard/summaries` (POST) accepts one to 40 observed event references (`key` and `id`); browser batches at most four. HTTP 202 means durable admission, while 200 can be a cache/result or refusal. `/api/dashboard/worker` is a separate authenticated private executor API. Credentials stay server-side; these app-level operations remain available in viewer mode. Source text is resolved by the app rather than accepted from clients; see [Dashboard](dashboard.md) for state, activation gate, and executor boundaries.
 
 ### CLI boundary
 

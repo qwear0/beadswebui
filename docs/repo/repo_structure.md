@@ -25,7 +25,7 @@
 - entrypoint: `app/layout.tsx` and `components/providers.tsx` — root layout and browser providers.
 - entrypoint: `app/page.tsx` — project launcher via `components/launcher.tsx`.
 - entrypoint: `app/p/[projectId]/page.tsx` — project page and `components/app-shell.tsx`.
-- entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — project-independent active agents and merged activity with server-side Neuro-gate descriptions.
+- entrypoint: `app/dashboard/page.tsx` and `components/dashboard.tsx` — project-independent active agents and merged activity; summary admission and the private worker API are documented in `docs/repo/dashboard.md`.
 - entrypoint: `app/api/` — route handlers; project issue operations live under `app/api/p/[projectId]/`.
 - entrypoint: `proxy.ts` — request guard and viewer-mode request handling.
 - entrypoint: `instrumentation.ts` and `instrumentation-node.ts` — Node runtime startup and shutdown hooks.
@@ -47,7 +47,7 @@
 - zone: `lib/beads-watch.ts` and `lib/sse-registry.ts` own server stream notification/lifecycle; `hooks/use-beads-stream.ts` owns browser invalidation.
 - zone: `lib/agent-watch.ts`, `lib/agent-api.ts`, `app/api/agents/`, and project agent routes own one shared read-only agent projection/stream. `hooks/use-agents.ts` keeps presence/history queries separate from Beads; agent components and `hooks/use-agent-filters.ts` own the browser surface.
 - owner-rule: The existing external `pi_quality_runtime` extension owns identity, stable Herdr-derived Beads names, presence, mail and native worker authority. This application is only its sanitized read-side consumer, not a Pi extension or scheduler.
-- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns AI-assist integration. `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts` own global activity aggregation, separate settings, and cached Neuro-gate descriptions; they do not own runtime messaging.
+- zone: `lib/showcase/` owns generated report/publishing support; `lib/ai.ts` owns separate AI Assist integration. Dashboard activity/source resolution and settings/admission are in `lib/dashboard-activity.ts`, `lib/dashboard-settings.ts`, and `lib/dashboard-summaries.ts`; `lib/dashboard-queue.ts` and `scripts/dashboard-queue.py` own the app's durable SQLite queue, and `lib/dashboard-worker.ts` plus `app/api/dashboard/worker/route.ts` own private worker auth/HTTP wiring. External executor deployment is operational architecture, not another app service.
 - zone: `lib/update-service.ts`, `lib/self-update.ts`, and `lib/update-types.ts` own update coordination and contracts.
 - zone: `lib/themes.ts`, `components/theme-provider.tsx`, and `app/globals.css` own theme registry, selection, and palettes.
 - zone: `public/` holds static assets; `design/` holds reference exports, not current runtime implementation.
