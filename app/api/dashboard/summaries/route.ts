@@ -1,13 +1,50 @@
-import { z } from "zod";
-import { fail } from "@/lib/api";
-import { summarizeDashboardEvents } from "@/lib/dashboard-summaries";
+import { ZodError } from "zod";
+import { dashboardSummaryAction, DashboardSummaryUnavailable } from "@/lib/dashboard-summaries";
 
 export const dynamic = "force-dynamic";
-const input = z.object({ events: z.array(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/), id: z.string().min(1).max(1024) }).strict()).min(1).max(4) }).strict();
+export const runtime = "nodejs";
+const MAX_BODY_BYTES = 64 * 1024;
+const noStore = { "Cache-Control": "no-store" };
+
+async function readBody(request: Request): Promise<unknown> {
+  const length = request.headers.get("content-length");
+  if (length && Number(length) > MAX_BODY_BYTES) throw new RangeError();
+  if (!request.body) throw new SyntaxError();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new RangeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  catch { throw new SyntaxError(); }
+}
+
 export async function POST(request: Request) {
   try {
-    const { events } = input.parse(await request.json());
-    const unique = [...new Map(events.map(event => [event.key, event])).values()];
-    return Response.json(await summarizeDashboardEvents(unique), { headers: { "Cache-Control": "no-store" } });
-  } catch (error) { return fail(error); }
+    const result = await dashboardSummaryAction(await readBody(request));
+    return Response.json({ items: result.items }, { status: result.status, headers: noStore });
+  } catch (error) {
+    if (error instanceof ZodError || error instanceof SyntaxError || error instanceof RangeError) {
+      return Response.json({ error: "Invalid input", code: "invalid_input" }, { status: 400, headers: noStore });
+    }
+    if (error instanceof DashboardSummaryUnavailable) {
+      return Response.json({ error: "Dashboard summary service is temporarily unavailable", code: "service_unavailable", retryAfterMs: 5000 }, { status: 503, headers: { ...noStore, "Retry-After": "5" } });
+    }
+    return Response.json({ error: "Dashboard summary service is temporarily unavailable", code: "service_unavailable", retryAfterMs: 5000 }, { status: 503, headers: { ...noStore, "Retry-After": "5" } });
+  }
 }
