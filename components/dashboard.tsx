@@ -97,26 +97,46 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
   const items = [...byId.values()].sort(compareDashboardEvents);
   const displayed = items.slice(0, limit);
   const signature = displayed.map(item => `${item.key}:${item.id}`).join("/");
-  const { descriptions, checkStatus, retry, recheck } = useDashboardSummaries(nearViewport, query.dataUpdatedAt);
+  const { descriptions, checkStatus, retry, retryAdmission, recheck } = useDashboardSummaries(nearViewport, query.dataUpdatedAt);
 
   React.useEffect(() => {
     const nearby = new Map<string, { ref: DashboardEventRef; priority: "visible" | "prefetch" }>();
-    const observer = new IntersectionObserver(entries => {
+    const visible = new Map<string, DashboardEventRef>();
+    const publish = () => {
+      const entries = new Map(nearby);
+      for (const [identity, ref] of visible) entries.set(identity, { ref, priority: "visible" });
+      setNearViewport([...entries.values()]);
+    };
+    const readRef = (target: Element) => {
+      const data = (target as HTMLElement).dataset;
+      return { key: data.eventKey!, id: data.eventId! };
+    };
+    const prefetchObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
-        const data = (entry.target as HTMLElement).dataset;
-        const ref = { key: data.eventKey!, id: data.eventId! };
+        const ref = readRef(entry.target);
         const identity = dashboardSummaryIdentity(ref);
-        if (entry.isIntersecting) {
-          const viewport = root.current?.getBoundingClientRect();
-          const card = entry.target.getBoundingClientRect();
-          const visible = !!viewport && card.bottom > viewport.top && card.top < viewport.bottom && card.right > viewport.left && card.left < viewport.right;
-          nearby.set(identity, { ref, priority: visible ? "visible" : "prefetch" });
-        } else nearby.delete(identity);
+        if (entry.isIntersecting) nearby.set(identity, { ref, priority: "prefetch" });
+        else nearby.delete(identity);
       }
-      setNearViewport([...nearby.values()]);
+      publish();
     }, { root: root.current, rootMargin: "80px", threshold: 0 });
-    root.current?.querySelectorAll("[data-event-key]").forEach(element => observer.observe(element));
-    return () => observer.disconnect();
+    const visibilityObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const ref = readRef(entry.target);
+        const identity = dashboardSummaryIdentity(ref);
+        if (entry.isIntersecting && entry.intersectionRatio > 0) visible.set(identity, ref);
+        else visible.delete(identity);
+      }
+      publish();
+    }, { root: root.current, rootMargin: "0px", threshold: 0 });
+    root.current?.querySelectorAll("[data-event-key]").forEach(element => {
+      prefetchObserver.observe(element);
+      visibilityObserver.observe(element);
+    });
+    return () => {
+      prefetchObserver.disconnect();
+      visibilityObserver.disconnect();
+    };
   }, [signature]);
 
   // Read enough mail history to cover the displayed time range before presenting
@@ -152,7 +172,7 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
       const summary = status?.state === "done" ? status.text : undefined;
       const retrySeconds = Math.max(0, Math.ceil(((status?.retryAt ?? 0) - now) / 1000));
       const reason = dashboardReasonText(status?.reason);
-      const canReplay = !!status?.replayable && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
+      const canReplay = !!status?.replayable && !(status.state === "not_accepted" && status.reason === "capacity") && ["failed", "obsolete", "not_accepted"].includes(status.state) && retrySeconds === 0;
       const recheckScope = status?.scope ?? (status?.reason === "route_blocked" ? "route" : status?.reason === "shared_blocked" ? "shared" : undefined);
       const canRecheck = status?.state === "blocked" && (recheckScope === "shared" || (recheckScope === "route" && !!status.route));
       return <li key={item.id} data-event-key={item.key} data-event-id={item.id}>
@@ -171,6 +191,7 @@ function DashboardFeed({ now, onSelect }: { now: number; onSelect: (event: Dashb
         </span>
       </button>
       {!summary && description?.error && <button type="button" disabled={description.checking} onClick={() => checkStatus(ref)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description.checking ? "Проверка…" : "Проверить состояние"}</button>}
+      {!summary && status?.state === "not_accepted" && status.reason === "capacity" && <button type="button" disabled={description?.checking} onClick={() => retryAdmission(ref, status)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Отправка…" : "Повторить запрос в очередь"}</button>}
       {!summary && canReplay && <button type="button" disabled={description?.checking} onClick={() => retry(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.checking ? "Повтор…" : "Повторить обработку"}</button>}
       {!summary && canRecheck && <button type="button" disabled={description?.rechecking} onClick={() => recheck(ref, status!)} className="mt-1 rounded px-2 py-1 text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50">{description?.rechecking ? "Проверка…" : `Перепроверить ${recheckScope === "route" ? "маршрут" : "общий исполнитель"}`}</button>}
     </li>;

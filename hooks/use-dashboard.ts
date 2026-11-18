@@ -82,7 +82,16 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
       }
       return [dashboardSummaryIdentity(ref), { item: { ...item, id: item.id ?? ref.id }, revision }] as const;
     });
-    setStored(current => ({ ...current, ...Object.fromEntries(received) }));
+    setStored(current => {
+      const next = { ...current };
+      for (const [identity, value] of received) {
+        const previous = current[identity]?.item;
+        const preserveCapacityRefusal = value.item.state === "not_accepted" && value.item.reason === "not_found"
+          && previous?.state === "not_accepted" && previous.reason === "capacity";
+        next[identity] = preserveCapacityRefusal ? { ...value, item: previous } : value;
+      }
+      return next;
+    });
     setChecking(current => {
       const next = { ...current };
       for (const ref of refs) delete next[dashboardSummaryIdentity(ref)];
@@ -137,7 +146,9 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
         setItems(fresh, response, revision);
         const missing = fresh.filter(ref => {
           const item = response.items[ref.key];
-          return item?.state === "not_accepted" && item.reason === "not_found";
+          const previous = currentStored.current[dashboardSummaryIdentity(ref)]?.item;
+          const capacityRefusal = previous?.state === "not_accepted" && previous.reason === "capacity";
+          return item?.state === "not_accepted" && item.reason === "not_found" && !capacityRefusal;
         });
         const current = new Map(currentEntries.current.map(entry => [dashboardSummaryIdentity(entry.ref), entry]));
         const admissions: AdmissionJob[] = [];
@@ -218,7 +229,7 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
     for (const ref of refs) {
       const identity = dashboardSummaryIdentity(ref);
       const entry = visible.get(identity);
-      if (!entry || !prefetchAccepted.current.has(identity) || promoted.current.has(identity)) continue;
+      if (!entry || !prefetchAccepted.current.has(identity) || promoted.current.has(identity) || admissionLocks.current.has(identity)) continue;
       promoted.current.add(identity);
       jobs.push({ entry, revision: currentRevision.current });
     }
@@ -318,6 +329,18 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
     void sendAdmissions([{ entry: { ...entry, priority: "retry" }, revision: currentRevision.current }], true);
   }, [sendAdmissions]);
 
+  const retryAdmission = useCallback((ref: DashboardEventRef, item: DashboardSummaryItem) => {
+    const identity = dashboardSummaryIdentity(ref);
+    const revision = currentRevision.current;
+    const saved = currentStored.current[identity];
+    if (item.state !== "not_accepted" || item.reason !== "capacity"
+      || saved?.revision !== revision || saved.item.state !== "not_accepted" || saved.item.reason !== "capacity"
+      || admissionLocks.current.has(identity)) return;
+    const entry = currentEntries.current.find(candidate => dashboardSummaryIdentity(candidate.ref) === identity);
+    if (!entry) return;
+    void sendAdmissions([{ entry, revision }]);
+  }, [sendAdmissions]);
+
   const recheck = useCallback(async (ref: DashboardEventRef, item: DashboardSummaryItem) => {
     const identity = dashboardSummaryIdentity(ref);
     const scope: DashboardSummaryScope | undefined = item.scope ?? (item.reason === "route_blocked" ? "route" : item.reason === "shared_blocked" ? "shared" : undefined);
@@ -348,5 +371,5 @@ export function useDashboardSummaries(entries: RelevantEntry[], activityRevision
       ...(notes[identity] ? { note: notes[identity] } : {}),
     };
   }
-  return { descriptions, checkStatus, retry, recheck };
+  return { descriptions, checkStatus, retry, retryAdmission, recheck };
 }
