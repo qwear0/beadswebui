@@ -58,6 +58,61 @@ export function readInteractions(repoPath: string): RawInteraction[] {
   return out;
 }
 
+/**
+ * Dashboard source re-resolution must distinguish an absent optional log from
+ * an unreadable or corrupt one. Keep the permissive reader above unchanged for
+ * existing Activity, Insights, and Gamification callers.
+ */
+export function readInteractionsStrict(repoPath: string): RawInteraction[] {
+  const file = path.join(repoPath, ".beads", "interactions.jsonl");
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+
+  try {
+    const stat = fs.fstatSync(fd);
+    const maxBytes = 32 * 1024 * 1024;
+    if (!stat.isFile() || stat.size > maxBytes || stat.nlink !== 1) throw new Error("Invalid Beads interaction log file");
+    const chunks: Buffer[] = [];
+    const chunk = Buffer.alloc(64 * 1024);
+    let length = 0;
+    for (;;) {
+      const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!count) break;
+      length += count;
+      if (length > maxBytes) throw new Error("Beads interaction log exceeds its read limit");
+      chunks.push(Buffer.from(chunk.subarray(0, count)));
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, length));
+    const out: RawInteraction[] = [];
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const value: unknown = JSON.parse(trimmed);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Beads interaction record");
+      const record = value as Record<string, unknown>;
+      for (const key of ["id", "kind", "created_at", "actor", "issue_id"]) {
+        if (record[key] !== undefined && record[key] !== null && typeof record[key] !== "string") throw new Error("Invalid Beads interaction field");
+      }
+      if (record.extra !== undefined && record.extra !== null && (typeof record.extra !== "object" || Array.isArray(record.extra))) throw new Error("Invalid Beads interaction change");
+      if (record.extra && typeof record.extra === "object") {
+        const extra = record.extra as Record<string, unknown>;
+        for (const key of ["field", "old_value", "new_value"]) {
+          if (extra[key] !== undefined && extra[key] !== null && !["string", "number", "boolean"].includes(typeof extra[key])) throw new Error("Invalid Beads interaction change field");
+        }
+      }
+      out.push(record as RawInteraction);
+    }
+    return out;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 const PRIORITY_LABELS = ["Critical", "High", "Medium", "Low", "Backlog"];
 
 function statusAction(v?: string): string {
