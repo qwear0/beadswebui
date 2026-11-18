@@ -23,7 +23,7 @@ const MESSAGE = /^msg_[0-9]{13}_[a-f0-9]{32}$/;
 const eventId = new RegExp(`^(?:${MESSAGE.source.slice(1, -1)}|${PROJECT.source.slice(1, -1)}\\/[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,895})$`);
 const refSchema = z.object({ id: z.string().min(1).max(1024).regex(eventId), key: z.string().regex(SHA256) }).strict();
 const statusRefList = z.array(refSchema.extend({ generation: z.string().regex(SHA256).optional() })).min(1).max(40);
-const browserRequestSchema = z.discriminatedUnion("action", [
+const browserRequestSchema = z.union([
   z.object({
     action: z.literal("admit"), entries: z.array(z.object({ ref: refSchema, priority: z.enum(["retry", "visible", "prefetch"]) }).strict()).min(1).max(40), replay: z.boolean().optional(),
   }).strict(),

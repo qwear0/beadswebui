@@ -45,7 +45,7 @@ const completeOutcomeSchema = z.object({
   model: modelSchema.optional(),
   retryAfterMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict().refine(outcome => outcome.kind !== "result" || outcome.text !== undefined);
-const requestSchema = z.discriminatedUnion("action", [
+const requestSchema = z.union([
   z.object({ action: z.literal("invite") }).strict(),
   z.object({ action: z.literal("claim"), invitation: tokenSchema }).strict(),
   z.object({ action: z.literal("resolve"), token: tokenSchema }).strict(),
