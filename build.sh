@@ -44,7 +44,7 @@ for value in "$INSTALL_TIMEOUT_SEC" "$BUILD_TIMEOUT_SEC" "$SERVICE_TIMEOUT_SEC" 
         exit 2
     }
 done
-for cmd in git node npm systemctl flock timeout curl realpath grep; do
+for cmd in git node npm python3 systemctl flock timeout curl realpath grep; do
     command -v "$cmd" >/dev/null || fail "'$cmd' is required"
 done
 

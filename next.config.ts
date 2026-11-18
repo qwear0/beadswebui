@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
   },
   // Eleventy is a CLI/Node tool we shell out to at runtime — never bundle it.
   serverExternalPackages: ["@11ty/eleventy"],
+  // The dashboard queue launches this Python stdlib worker at runtime; include
+  // it in standalone server traces even though the file is not imported by JS.
+  outputFileTracingIncludes: { "/*": ["./scripts/dashboard-queue.py"] },
   logging: {
     // The board refetches /beads every few seconds (poll + SSE), which floods the
     // dev console. Suppress those high-frequency poll/stream request logs only —

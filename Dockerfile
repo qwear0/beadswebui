@@ -54,6 +54,11 @@ ENV HOSTNAME=0.0.0.0
 ENV HOME=/home/nextjs
 ENV XDG_CONFIG_HOME=/home/nextjs/.config
 
+# The durable Dashboard queue uses only Python's standard-library sqlite3.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/*
+
 # Run as a non-root user for security and give bd a real home/config dir.
 # The home/config dirs are world-writable so `docker run --user <uid>:<gid>`
 # (the README's fix for mounted-volume permission errors) can still write app
